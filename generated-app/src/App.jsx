@@ -27,8 +27,8 @@ const styles = `
   }
 
   @keyframes flowerSway {
-    0%, 100% { transform: rotate(-4deg); }
-    50%       { transform: rotate(4deg); }
+    0%, 100% { transform: rotate(-3deg); }
+    50%       { transform: rotate(3deg); }
   }
 
   @keyframes cloudDrift {
@@ -128,7 +128,7 @@ const styles = `
 
   .flower {
     display: inline-block;
-    animation: flowerSway 2s ease-in-out infinite;
+    animation: flowerSway 1.5s ease-in-out infinite;
     transform-origin: bottom center;
   }
 
@@ -447,9 +447,3 @@ export default function App() {
           >
             🐱
           </div>
-        )}
-
-        {/* Dog + bark bubble */}
-        <div style={{ position: "relative" }} ref={dogRef}>
-          {dogBarking && (
-            <div
