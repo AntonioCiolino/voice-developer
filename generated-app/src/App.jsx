@@ -68,6 +68,13 @@ const styles = `
     100% { opacity: 0; }
   }
 
+  @keyframes skyFlash {
+    0%   { background-color: #87CEEB; }
+    20%  { background-color: #ff2200; }
+    80%  { background-color: #ff2200; }
+    100% { background-color: #87CEEB; }
+  }
+
   .cat {
     position: absolute;
     font-size: 4rem;
@@ -172,6 +179,10 @@ const styles = `
     border-style: solid;
     border-color: #333 transparent transparent;
   }
+
+  .sky-red {
+    animation: skyFlash 3s ease forwards !important;
+  }
 `;
 
 const EXPLODE_EMOJIS = ["💥", "✨", "⭐", "🌟", "💫", "🔥", "🪶", "💨"];
@@ -182,6 +193,7 @@ export default function App() {
   const [crowVisible, setCrowVisible] = useState(true);
   const [dogBarking, setDogBarking] = useState(false);
   const [catEating, setCatEating] = useState(false);
+  const [skyRed, setSkyRed] = useState(false);
   const dogRef = useRef(null);
 
   useEffect(() => {
@@ -214,10 +226,12 @@ export default function App() {
 
     setParticles((prev) => [...prev, ...newParticles]);
     setCrowVisible(false);
+    setSkyRed(true);
 
     setTimeout(() => {
       setParticles((prev) => prev.filter((p) => !newParticles.find((np) => np.id === p.id)));
       setCrowVisible(true);
+      setSkyRed(false);
     }, 3000);
   };
 
@@ -241,6 +255,7 @@ export default function App() {
     <>
       <style>{styles}</style>
       <div
+        className={skyRed ? "sky-red" : ""}
         style={{
           minHeight: "100vh",
           backgroundColor: "#87CEEB",
