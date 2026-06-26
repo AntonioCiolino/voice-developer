@@ -44,20 +44,19 @@ export default function App() {
   };
 
   const handleSunClick = () => {
-    if (skyGreen) return;
+    if (skyGreen || skyRed) return;
     setSkyGreen(true);
     setTimeout(() => setSkyGreen(false), 3000);
   };
 
-  const skyClass = skyRed ? "sky-red" : skyGreen ? "sky-green" : "";
-  const skyBg = skyRed || skyGreen ? undefined : "#87CEEB";
+  const skyBg = skyRed ? "#ff2200" : skyGreen ? "#22cc44" : "#87CEEB";
 
   return (
     <div
-      className={skyClass}
       style={{
         minHeight: "100vh",
         backgroundColor: skyBg,
+        transition: "background-color 0.5s ease",
         position: "relative",
         overflow: "hidden",
       }}
