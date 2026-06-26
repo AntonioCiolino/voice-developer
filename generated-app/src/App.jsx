@@ -58,13 +58,6 @@ const styles = `
     100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.3); }
   }
 
-  @keyframes catJumpEat {
-    0%   { bottom: 130px; left: 50%; transform: scaleX(-1); }
-    30%  { bottom: 300px; left: 50%; transform: scaleX(-1); }
-    60%  { bottom: 300px; left: 50%; transform: scaleX(-1); }
-    100% { bottom: 130px; left: 50%; transform: scaleX(-1); }
-  }
-
   @keyframes barkBubble {
     0%   { opacity: 0; transform: scale(0.5); }
     15%  { opacity: 1; transform: scale(1.1); }
@@ -88,16 +81,6 @@ const styles = `
     transform: scaleX(-1);
     cursor: pointer;
     z-index: 6;
-  }
-
-  .cat-eating {
-    position: absolute;
-    font-size: 4rem;
-    bottom: 130px;
-    transform: scaleX(-1);
-    cursor: pointer;
-    z-index: 10;
-    animation: catJumpEat 3s ease-in-out forwards;
   }
 
   .dog {
@@ -203,8 +186,14 @@ export default function App() {
   const [particles, setParticles] = useState([]);
   const [crowVisible, setCrowVisible] = useState(true);
   const [dogBarking, setDogBarking] = useState(false);
-  const [catEating, setCatEating] = useState(false);
   const [skyRed, setSkyRed] = useState(false);
+
+  // Cat leap state
+  const [catLeaping, setCatLeaping] = useState(false);
+  const [catStyle, setCatStyle] = useState(null); // null = use CSS class animation
+
+  const crowRef = useRef(null);
+  const catRef = useRef(null);
   const dogRef = useRef(null);
 
   useEffect(() => {
@@ -253,13 +242,100 @@ export default function App() {
   };
 
   const handleCatClick = () => {
-    if (catEating || !crowVisible) return;
-    setCatEating(true);
+    if (catLeaping || !crowVisible) return;
+
+    // Get current positions
+    const crowEl = crowRef.current;
+    const catEl = catRef.current;
+    if (!crowEl || !catEl) return;
+
+    const crowRect = crowEl.getBoundingClientRect();
+    const catRect = catEl.getBoundingClientRect();
+    const containerEl = catEl.parentElement;
+    const containerRect = containerEl.getBoundingClientRect();
+
+    // Cat's current left (px from container left)
+    const catStartLeft = catRect.left - containerRect.left;
+    // Cat's current bottom (px from container bottom)
+    const catStartBottom = containerRect.bottom - catRect.bottom;
+
+    // Crow center in container coords
+    const crowTargetLeft = crowRect.left - containerRect.left + crowRect.width / 2 - catRect.width / 2;
+    const crowTargetBottom = containerRect.bottom - crowRect.bottom + crowRect.height / 2;
+
+    setCatLeaping(true);
     setCrowVisible(false);
-    setTimeout(() => {
-      setCatEating(false);
-      setCrowVisible(true);
-    }, 3000);
+
+    // We'll drive the cat with inline styles + a CSS transition
+    // Step 1: freeze cat at current position (no animation)
+    setCatStyle({
+      position: "absolute",
+      fontSize: "4rem",
+      transform: "scaleX(-1)",
+      cursor: "pointer",
+      zIndex: 10,
+      left: catStartLeft,
+      bottom: catStartBottom,
+      transition: "none",
+    });
+
+    // Step 2: next frame, animate to crow position
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setCatStyle((prev) => ({
+          ...prev,
+          left: crowTargetLeft,
+          bottom: crowTargetBottom,
+          transition: "left 0.5s ease-in-out, bottom 0.4s ease-in",
+          fontSize: "4rem",
+        }));
+
+        // Step 3: at crow position, show eating emoji briefly then return
+        setTimeout(() => {
+          // Show eating face
+          setCatStyle((prev) => ({
+            ...prev,
+            transition: "none",
+          }));
+
+          // Explode the crow
+          const cx = crowRect.left + crowRect.width / 2;
+          const cy = crowRect.top + crowRect.height / 2;
+          const newParticles = EXPLODE_EMOJIS.map((emoji, i) => {
+            const angle = (i / EXPLODE_EMOJIS.length) * 2 * Math.PI;
+            const dist = 60 + Math.random() * 60;
+            return {
+              id: Date.now() + i,
+              emoji,
+              x: cx,
+              y: cy,
+              tx: `${Math.cos(angle) * dist}px`,
+              ty: `${Math.sin(angle) * dist}px`,
+            };
+          });
+          setParticles((prev) => [...prev, ...newParticles]);
+
+          // Step 4: after eating pause, leap back down to ground
+          setTimeout(() => {
+            setCatStyle((prev) => ({
+              ...prev,
+              bottom: catStartBottom,
+              transition: "bottom 0.4s ease-in",
+            }));
+
+            // Step 5: restore running animation
+            setTimeout(() => {
+              setCatStyle(null);
+              setCatLeaping(false);
+              setCrowVisible(true);
+              setParticles((prev) =>
+                prev.filter((p) => !newParticles.find((np) => np.id === p.id))
+              );
+            }, 500);
+          }, 800);
+        }, 550);
+      });
+    });
   };
 
   return (
@@ -315,7 +391,7 @@ export default function App() {
 
         {/* Crow */}
         {crowVisible && (
-          <div className="crow" onClick={handleCrowClick} title="Click me!">
+          <div className="crow" ref={crowRef} onClick={handleCrowClick} title="Click me!">
             🐦
           </div>
         )}
@@ -353,13 +429,22 @@ export default function App() {
           </div>
         ))}
 
-        {/* Cat - normal running or eating */}
-        {catEating ? (
-          <div className="cat-eating" onClick={handleCatClick}>
-            😸
+        {/* Cat */}
+        {catStyle ? (
+          <div
+            ref={catRef}
+            style={catStyle}
+            onClick={handleCatClick}
+          >
+            {catLeaping ? "😸" : "🐱"}
           </div>
         ) : (
-          <div className="cat" onClick={handleCatClick} title="Click me!">
+          <div
+            className="cat"
+            ref={catRef}
+            onClick={handleCatClick}
+            title="Click me!"
+          >
             🐱
           </div>
         )}
@@ -368,63 +453,3 @@ export default function App() {
         <div style={{ position: "relative" }} ref={dogRef}>
           {dogBarking && (
             <div
-              className="bark-bubble"
-              style={{
-                left: "48%",
-              }}
-            >
-              Woof! 🗣️
-            </div>
-          )}
-          <div className="dog" onClick={handleDogClick} title="Click me!">
-            🐶
-          </div>
-        </div>
-
-        {/* Ground */}
-        <div
-          style={{
-            width: "100%",
-            height: "130px",
-            backgroundColor: "#5DBB63",
-            position: "relative",
-            borderTop: "6px solid #4a9e50",
-            zIndex: 3,
-          }}
-        >
-          {/* Grass blades */}
-          <div style={{ display: "flex", justifyContent: "space-around", marginTop: "-10px" }}>
-            {Array.from({ length: 30 }).map((_, i) => (
-              <span
-                key={i}
-                className="grass-blade"
-                style={{
-                  animationDelay: `${(i * 0.15) % 1.5}s`,
-                  fontSize: `${1.5 + (i % 3) * 0.4}rem`,
-                }}
-              >
-                🌿
-              </span>
-            ))}
-          </div>
-
-          {/* Flowers */}
-          <div style={{ display: "flex", justifyContent: "space-around", marginTop: "10px", paddingLeft: "20px" }}>
-            {["🌸", "🌼", "🌺", "🌻", "🌸", "🌼", "🌺", "🌻", "🌸", "🌼"].map((flower, i) => (
-              <span
-                key={i}
-                className="flower"
-                style={{
-                  fontSize: "1.4rem",
-                  animationDelay: `${(i * 0.2) % 2}s`,
-                }}
-              >
-                {flower}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
