@@ -58,15 +58,12 @@ export default function App() {
 
   return (
     <div
+      className="app-root"
       style={{
-        minHeight: "100vh",
-        // Fallback for iOS Safari where 100vh includes browser chrome
-        minHeight: "-webkit-fill-available",
         backgroundColor: skyBg,
         transition: "background-color 0.3s ease",
         position: "relative",
         overflow: "hidden",
-        // Prevent iOS double-tap zoom
         touchAction: "manipulation",
       }}
     >
@@ -91,12 +88,10 @@ export default function App() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          // Both prefixed and unprefixed for Safari
           WebkitBackdropFilter: "blur(4px)",
           backdropFilter: "blur(4px)",
           boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
           transition: "background 0.2s",
-          // Ensure tappable on iOS
           WebkitTapHighlightColor: "transparent",
           touchAction: "manipulation",
         }}
@@ -123,6 +118,7 @@ export default function App() {
             left: `${paw.x}%`,
             fontSize: "1.2rem",
             animation: "pawPrint 1.8s ease forwards",
+            WebkitAnimation: "pawPrint 1.8s ease forwards",
             zIndex: 5,
             pointerEvents: "none",
           }}
