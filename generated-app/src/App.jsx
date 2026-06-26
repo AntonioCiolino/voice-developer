@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const styles = `
   @keyframes catRun {
@@ -48,12 +48,44 @@ const styles = `
     50%       { transform: scaleY(0.6); }
   }
 
+  @keyframes explodeParticle {
+    0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+    100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.3); }
+  }
+
+  @keyframes catJumpEat {
+    0%   { bottom: 130px; left: 50%; transform: scaleX(-1); }
+    30%  { bottom: 300px; left: 50%; transform: scaleX(-1); }
+    60%  { bottom: 300px; left: 50%; transform: scaleX(-1); }
+    100% { bottom: 130px; left: 50%; transform: scaleX(-1); }
+  }
+
+  @keyframes barkBubble {
+    0%   { opacity: 0; transform: scale(0.5); }
+    15%  { opacity: 1; transform: scale(1.1); }
+    25%  { transform: scale(1); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
   .cat {
     position: absolute;
     font-size: 4rem;
     animation: catRun 4s linear infinite, bounce 0.4s ease-in-out infinite;
     bottom: 130px;
     transform: scaleX(-1);
+    cursor: pointer;
+    z-index: 6;
+  }
+
+  .cat-eating {
+    position: absolute;
+    font-size: 4rem;
+    bottom: 130px;
+    transform: scaleX(-1);
+    cursor: pointer;
+    z-index: 10;
+    animation: catJumpEat 3s ease-in-out forwards;
   }
 
   .dog {
@@ -62,6 +94,8 @@ const styles = `
     animation: dogRun 4s linear infinite 0.7s, bounceDog 0.35s ease-in-out infinite;
     bottom: 125px;
     transform: scaleX(-1);
+    cursor: pointer;
+    z-index: 6;
   }
 
   .cloud1 {
@@ -87,6 +121,7 @@ const styles = `
     animation: crowFly 9s linear infinite 2s, flapWings 0.3s ease-in-out infinite;
     z-index: 5;
     filter: grayscale(100%) brightness(0.2);
+    cursor: pointer;
   }
 
   .grass-blade {
@@ -95,10 +130,59 @@ const styles = `
     transform-origin: bottom center;
     font-size: 2rem;
   }
+
+  .explode-particle {
+    position: fixed;
+    font-size: 1.8rem;
+    pointer-events: none;
+    animation: explodeParticle 0.8s ease-out forwards;
+    z-index: 999;
+  }
+
+  .bark-bubble {
+    position: absolute;
+    bottom: 175px;
+    font-size: 1.2rem;
+    background: white;
+    border: 2px solid #333;
+    border-radius: 12px;
+    padding: 4px 10px;
+    white-space: nowrap;
+    animation: barkBubble 2s ease forwards;
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  .bark-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -10px;
+    left: 14px;
+    border-width: 10px 8px 0;
+    border-style: solid;
+    border-color: white transparent transparent;
+  }
+
+  .bark-bubble::before {
+    content: '';
+    position: absolute;
+    bottom: -13px;
+    left: 12px;
+    border-width: 12px 10px 0;
+    border-style: solid;
+    border-color: #333 transparent transparent;
+  }
 `;
+
+const EXPLODE_EMOJIS = ["💥", "✨", "⭐", "🌟", "💫", "🔥", "🪶", "💨"];
 
 export default function App() {
   const [paws, setPaws] = useState([]);
+  const [particles, setParticles] = useState([]);
+  const [crowVisible, setCrowVisible] = useState(true);
+  const [dogBarking, setDogBarking] = useState(false);
+  const [catEating, setCatEating] = useState(false);
+  const dogRef = useRef(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -108,6 +192,50 @@ export default function App() {
     }, 600);
     return () => clearInterval(interval);
   }, []);
+
+  const handleCrowClick = (e) => {
+    if (!crowVisible) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    const newParticles = EXPLODE_EMOJIS.map((emoji, i) => {
+      const angle = (i / EXPLODE_EMOJIS.length) * 2 * Math.PI;
+      const dist = 60 + Math.random() * 60;
+      return {
+        id: Date.now() + i,
+        emoji,
+        x: cx,
+        y: cy,
+        tx: `${Math.cos(angle) * dist}px`,
+        ty: `${Math.sin(angle) * dist}px`,
+      };
+    });
+
+    setParticles((prev) => [...prev, ...newParticles]);
+    setCrowVisible(false);
+
+    setTimeout(() => {
+      setParticles((prev) => prev.filter((p) => !newParticles.find((np) => np.id === p.id)));
+      setCrowVisible(true);
+    }, 3000);
+  };
+
+  const handleDogClick = () => {
+    if (dogBarking) return;
+    setDogBarking(true);
+    setTimeout(() => setDogBarking(false), 2000);
+  };
+
+  const handleCatClick = () => {
+    if (catEating || !crowVisible) return;
+    setCatEating(true);
+    setCrowVisible(false);
+    setTimeout(() => {
+      setCatEating(false);
+      setCrowVisible(true);
+    }, 3000);
+  };
 
   return (
     <>
@@ -160,7 +288,27 @@ export default function App() {
         </div>
 
         {/* Crow */}
-        <div className="crow">🐦</div>
+        {crowVisible && (
+          <div className="crow" onClick={handleCrowClick} title="Click me!">
+            🐦
+          </div>
+        )}
+
+        {/* Explosion particles */}
+        {particles.map((p) => (
+          <div
+            key={p.id}
+            className="explode-particle"
+            style={{
+              left: p.x,
+              top: p.y,
+              "--tx": p.tx,
+              "--ty": p.ty,
+            }}
+          >
+            {p.emoji}
+          </div>
+        ))}
 
         {/* Paw prints */}
         {paws.map((paw) => (
@@ -179,11 +327,33 @@ export default function App() {
           </div>
         ))}
 
-        {/* Cat */}
-        <div className="cat">🐱</div>
+        {/* Cat - normal running or eating */}
+        {catEating ? (
+          <div className="cat-eating" onClick={handleCatClick}>
+            😸
+          </div>
+        ) : (
+          <div className="cat" onClick={handleCatClick} title="Click me!">
+            🐱
+          </div>
+        )}
 
-        {/* Dog */}
-        <div className="dog">🐶</div>
+        {/* Dog + bark bubble */}
+        <div style={{ position: "relative" }} ref={dogRef}>
+          {dogBarking && (
+            <div
+              className="bark-bubble"
+              style={{
+                left: "48%",
+              }}
+            >
+              Woof! 🗣️
+            </div>
+          )}
+          <div className="dog" onClick={handleDogClick} title="Click me!">
+            🐶
+          </div>
+        </div>
 
         {/* Ground */}
         <div
