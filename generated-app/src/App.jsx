@@ -10,6 +10,7 @@ import { styles } from "./styles.js";
 import { useCatLeap } from "./hooks/useCatLeap.js";
 import { useCrowExplosion } from "./hooks/useCrowExplosion.js";
 import { usePawPrints } from "./hooks/usePawPrints.js";
+import { useBackgroundMusic } from "./hooks/useBackgroundMusic.js";
 
 export default function App() {
   const catRef = useRef(null);
@@ -21,6 +22,8 @@ export default function App() {
   const [skyRed, setSkyRed] = useState(false);
   const [skyGreen, setSkyGreen] = useState(false);
   const [barking, setBarking] = useState(false);
+
+  const { muted, toggleMute } = useBackgroundMusic();
 
   const { catLeaping, catStyle, handleCatClick } = useCatLeap({
     catRef,
@@ -64,6 +67,33 @@ export default function App() {
       }}
     >
       <style>{styles}</style>
+
+      {/* Mute / Unmute button */}
+      <button
+        onClick={toggleMute}
+        title={muted ? "Unmute music" : "Mute music"}
+        style={{
+          position: "absolute",
+          top: "20px",
+          right: "16px",
+          zIndex: 100,
+          background: "rgba(255,255,255,0.25)",
+          border: "2px solid rgba(255,255,255,0.6)",
+          borderRadius: "50%",
+          width: "44px",
+          height: "44px",
+          fontSize: "1.4rem",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backdropFilter: "blur(4px)",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+          transition: "background 0.2s",
+        }}
+      >
+        {muted ? "🔇" : "🎵"}
+      </button>
 
       {/* Sky elements */}
       <Sky onSunClick={handleSunClick} />
