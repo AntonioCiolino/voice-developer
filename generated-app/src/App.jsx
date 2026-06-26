@@ -49,14 +49,16 @@ export default function App() {
     setTimeout(() => setSkyGreen(false), 3000);
   };
 
-  const skyBg = skyRed ? "#ff2200" : skyGreen ? "#22cc44" : "#87CEEB";
+  let skyBg = "#87CEEB";
+  if (skyRed) skyBg = "#ff2200";
+  if (skyGreen) skyBg = "#22cc44";
 
   return (
     <div
       style={{
         minHeight: "100vh",
         backgroundColor: skyBg,
-        transition: "background-color 0.5s ease",
+        transition: "background-color 0.3s ease",
         position: "relative",
         overflow: "hidden",
       }}
