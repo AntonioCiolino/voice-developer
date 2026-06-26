@@ -38,6 +38,16 @@ const styles = `
     100% { opacity: 0; }
   }
 
+  @keyframes crowFly {
+    0%   { left: -100px; }
+    100% { left: 110%; }
+  }
+
+  @keyframes flapWings {
+    0%, 100% { transform: scaleY(1); }
+    50%       { transform: scaleY(0.6); }
+  }
+
   .cat {
     position: absolute;
     font-size: 4rem;
@@ -68,6 +78,15 @@ const styles = `
     top: 100px;
     animation: cloudDrift 25s linear infinite 6s;
     opacity: 0.7;
+  }
+
+  .crow {
+    position: absolute;
+    font-size: 2.2rem;
+    top: 140px;
+    animation: crowFly 9s linear infinite 2s, flapWings 0.3s ease-in-out infinite;
+    z-index: 5;
+    filter: grayscale(100%) brightness(0.2);
   }
 
   .grass-blade {
@@ -139,6 +158,9 @@ export default function App() {
         <div style={{ position: "absolute", top: "30px", right: "60px", fontSize: "3.5rem" }}>
           ☀️
         </div>
+
+        {/* Crow */}
+        <div className="crow">🐦</div>
 
         {/* Paw prints */}
         {paws.map((paw) => (
