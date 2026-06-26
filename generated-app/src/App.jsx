@@ -53,13 +53,6 @@ const styles = `
     100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.3); }
   }
 
-  @keyframes catJumpEat {
-    0%   { bottom: 130px; left: 50%; transform: scaleX(-1); }
-    30%  { bottom: 300px; left: 50%; transform: scaleX(-1); }
-    60%  { bottom: 300px; left: 50%; transform: scaleX(-1); }
-    100% { bottom: 130px; left: 50%; transform: scaleX(-1); }
-  }
-
   @keyframes barkBubble {
     0%   { opacity: 0; transform: scale(0.5); }
     15%  { opacity: 1; transform: scale(1.1); }
@@ -83,16 +76,6 @@ const styles = `
     transform: scaleX(-1);
     cursor: pointer;
     z-index: 6;
-  }
-
-  .cat-eating {
-    position: absolute;
-    font-size: 4rem;
-    bottom: 130px;
-    transform: scaleX(-1);
-    cursor: pointer;
-    z-index: 10;
-    animation: catJumpEat 3s ease-in-out forwards;
   }
 
   .dog {
@@ -193,8 +176,12 @@ export default function App() {
   const [crowVisible, setCrowVisible] = useState(true);
   const [dogBarking, setDogBarking] = useState(false);
   const [catEating, setCatEating] = useState(false);
+  // catEatingPos: { left (px), top (px) } — where the cat flies to eat
+  const [catEatingPos, setCatEatingPos] = useState(null);
   const [skyRed, setSkyRed] = useState(false);
   const dogRef = useRef(null);
+  const crowRef = useRef(null);
+  const catRef = useRef(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -243,17 +230,55 @@ export default function App() {
 
   const handleCatClick = () => {
     if (catEating || !crowVisible) return;
+
+    // Get the crow's current screen position
+    const crowEl = crowRef.current;
+    if (!crowEl) return;
+    const crowRect = crowEl.getBoundingClientRect();
+
+    // Get the scene container (the outer div) to convert to relative coords
+    const container = crowEl.offsetParent || document.body;
+    const containerRect = container.getBoundingClientRect();
+
+    const crowLeft = crowRect.left - containerRect.left + crowRect.width / 2 - 32; // center cat emoji (~64px wide, so -32)
+    const crowTop = crowRect.top - containerRect.top + crowRect.height / 2 - 32;
+
+    setCatEatingPos({ left: crowLeft, top: crowTop });
     setCatEating(true);
     setCrowVisible(false);
+
     setTimeout(() => {
       setCatEating(false);
+      setCatEatingPos(null);
       setCrowVisible(true);
     }, 3000);
   };
 
+  // Build the cat-eating keyframes dynamically based on crow position
+  const catEatingStyle =
+    catEatingPos !== null
+      ? `
+    @keyframes catJumpEat {
+      0%   { left: 110%; top: calc(100% - 130px - 64px); }
+      40%  { left: ${catEatingPos.left}px; top: ${catEatingPos.top}px; }
+      70%  { left: ${catEatingPos.left}px; top: ${catEatingPos.top}px; }
+      100% { left: 110%; top: calc(100% - 130px - 64px); }
+    }
+    .cat-eating {
+      position: absolute;
+      font-size: 4rem;
+      transform: scaleX(-1);
+      cursor: pointer;
+      z-index: 10;
+      animation: catJumpEat 3s ease-in-out forwards;
+    }
+  `
+      : "";
+
   return (
     <>
       <style>{styles}</style>
+      {catEatingPos !== null && <style>{catEatingStyle}</style>}
       <div
         className={skyRed ? "sky-red" : ""}
         style={{
@@ -304,7 +329,7 @@ export default function App() {
 
         {/* Crow */}
         {crowVisible && (
-          <div className="crow" onClick={handleCrowClick} title="Click me!">
+          <div className="crow" ref={crowRef} onClick={handleCrowClick} title="Click me!">
             🐦
           </div>
         )}
@@ -344,11 +369,11 @@ export default function App() {
 
         {/* Cat - normal running or eating */}
         {catEating ? (
-          <div className="cat-eating" onClick={handleCatClick}>
+          <div className="cat-eating">
             😸
           </div>
         ) : (
-          <div className="cat" onClick={handleCatClick} title="Click me!">
+          <div className="cat" ref={catRef} onClick={handleCatClick} title="Click me!">
             🐱
           </div>
         )}
