@@ -71,7 +71,7 @@ const styles = `
   .cat {
     position: absolute;
     font-size: 4rem;
-    animation: catRun 4s linear infinite, bounce 0.4s ease-in-out infinite;
+    animation: catRun 7s linear infinite, bounce 0.4s ease-in-out infinite;
     bottom: 130px;
     transform: scaleX(-1);
     cursor: pointer;
@@ -91,8 +91,8 @@ const styles = `
   .dog {
     position: absolute;
     font-size: 4rem;
-    animation: dogRun 4s linear infinite 0.7s, bounceDog 0.35s ease-in-out infinite;
-    bottom: 125px;
+    animation: dogRun 7s linear infinite 0.7s, bounceDog 0.35s ease-in-out infinite;
+    bottom: 130px;
     transform: scaleX(-1);
     cursor: pointer;
     z-index: 6;
