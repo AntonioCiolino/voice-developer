@@ -47,7 +47,7 @@ export default function App() {
       className={skyRed ? "sky-red" : ""}
       style={{
         minHeight: "100vh",
-        backgroundColor: "#87CEEB",
+        backgroundColor: skyRed ? undefined : "#87CEEB",
         position: "relative",
         overflow: "hidden",
       }}
