@@ -3,30 +3,26 @@ import { useEffect, useRef, useState } from "react";
 const BALL_SIZE = 40;
 const GROUND_Y = 130; // bottom offset where ball rests (matches CSS ground height)
 const GRAVITY = 0.5;
-const BOUNCE_DAMPING = 0.72;
-const INITIAL_VX = 3.5;
-const INITIAL_VY = -12;
+const BOUNCE_DAMPING = 0.85;
+const INITIAL_VX = 5;
+const INITIAL_VY = -20;
+const MIN_BOUNCE_VY = 18;
+const MAX_BOUNCE_VY = 22;
 
 export default function Ball() {
-  const containerRef = useRef(null);
   const stateRef = useRef({
     x: 60,
     vx: INITIAL_VX,
     vy: INITIAL_VY,
-    // y measured from bottom of viewport upward, matching `bottom` CSS
     y: GROUND_Y,
   });
   const rafRef = useRef(null);
   const [pos, setPos] = useState({ x: 60, y: GROUND_Y });
 
   useEffect(() => {
-    const getContainerWidth = () => {
-      return window.innerWidth;
-    };
-
     const tick = () => {
       const s = stateRef.current;
-      const width = getContainerWidth();
+      const width = window.innerWidth;
 
       // Apply gravity (vy is upward positive, so gravity subtracts)
       s.vy -= GRAVITY;
@@ -38,22 +34,27 @@ export default function Ball() {
       if (s.y <= GROUND_Y) {
         s.y = GROUND_Y;
         s.vy = Math.abs(s.vy) * BOUNCE_DAMPING;
-        // If bounce is too small, reset to keep it lively
-        if (s.vy < 3) {
-          s.vy = 8 + Math.random() * 5;
+        // Keep bounce height lively
+        if (s.vy < MIN_BOUNCE_VY) {
+          s.vy = MIN_BOUNCE_VY + Math.random() * (MAX_BOUNCE_VY - MIN_BOUNCE_VY);
+        }
+        // Keep horizontal speed consistent
+        const speed = Math.abs(s.vx);
+        if (speed < INITIAL_VX) {
+          s.vx = s.vx < 0 ? -INITIAL_VX : INITIAL_VX;
         }
       }
 
       // Bounce off left edge
       if (s.x <= 0) {
         s.x = 0;
-        s.vx = Math.abs(s.vx);
+        s.vx = INITIAL_VX;
       }
 
       // Bounce off right edge
       if (s.x >= width - BALL_SIZE) {
         s.x = width - BALL_SIZE;
-        s.vx = -Math.abs(s.vx);
+        s.vx = -INITIAL_VX;
       }
 
       setPos({ x: s.x, y: s.y });
