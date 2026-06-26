@@ -29,6 +29,14 @@ export const styles = `
     50%       { transform: rotate(3deg); }
   }
 
+  @keyframes fernSway {
+    0%   { transform: rotate(-8deg) scaleX(-1); }
+    25%  { transform: rotate(6deg) scaleX(-1); }
+    50%  { transform: rotate(-10deg) scaleX(-1); }
+    75%  { transform: rotate(4deg) scaleX(-1); }
+    100% { transform: rotate(-8deg) scaleX(-1); }
+  }
+
   @keyframes cloudDrift {
     0%   { left: 110%; }
     100% { left: -200px; }
@@ -128,6 +136,13 @@ export const styles = `
     display: inline-block;
     animation: flowerSway 1.5s ease-in-out infinite;
     transform-origin: bottom center;
+  }
+
+  .fern {
+    display: inline-block;
+    animation: fernSway 1.8s ease-in-out infinite;
+    transform-origin: bottom center;
+    transform: scaleX(-1);
   }
 
   .explode-particle {

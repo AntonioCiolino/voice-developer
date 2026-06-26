@@ -1,0 +1,4 @@
+cd generated-app
+git add src/constants.js src/components/Ground.jsx src/styles.js
+git commit -m "Add layered wavy ferns to ground for chase scene depth"
+git push
