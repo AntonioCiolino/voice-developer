@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+controller/venv/
+controller/.env
+
+# Node
+generated-app/node_modules/
+generated-app/dist/
+
+# Worker logs
+worker/tasks.log
+
+# OS
+.DS_Store
