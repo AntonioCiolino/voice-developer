@@ -4,9 +4,11 @@ export default function Title() {
       style={{
         position: "absolute",
         top: "20px",
-        width: "100%",
+        left: 0,
+        right: "160px",
         textAlign: "center",
         zIndex: 10,
+        pointerEvents: "none",
       }}
     >
       <h1
