@@ -244,7 +244,6 @@ export default function App() {
   const handleCatClick = () => {
     if (catLeaping || !crowVisible) return;
 
-    // Get current positions
     const crowEl = crowRef.current;
     const catEl = catRef.current;
     if (!crowEl || !catEl) return;
@@ -254,20 +253,15 @@ export default function App() {
     const containerEl = catEl.parentElement;
     const containerRect = containerEl.getBoundingClientRect();
 
-    // Cat's current left (px from container left)
     const catStartLeft = catRect.left - containerRect.left;
-    // Cat's current bottom (px from container bottom)
     const catStartBottom = containerRect.bottom - catRect.bottom;
 
-    // Crow center in container coords
     const crowTargetLeft = crowRect.left - containerRect.left + crowRect.width / 2 - catRect.width / 2;
     const crowTargetBottom = containerRect.bottom - crowRect.bottom + crowRect.height / 2;
 
     setCatLeaping(true);
     setCrowVisible(false);
 
-    // We'll drive the cat with inline styles + a CSS transition
-    // Step 1: freeze cat at current position (no animation)
     setCatStyle({
       position: "absolute",
       fontSize: "4rem",
@@ -279,7 +273,6 @@ export default function App() {
       transition: "none",
     });
 
-    // Step 2: next frame, animate to crow position
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         setCatStyle((prev) => ({
@@ -290,15 +283,12 @@ export default function App() {
           fontSize: "4rem",
         }));
 
-        // Step 3: at crow position, show eating emoji briefly then return
         setTimeout(() => {
-          // Show eating face
           setCatStyle((prev) => ({
             ...prev,
             transition: "none",
           }));
 
-          // Explode the crow
           const cx = crowRect.left + crowRect.width / 2;
           const cy = crowRect.top + crowRect.height / 2;
           const newParticles = EXPLODE_EMOJIS.map((emoji, i) => {
@@ -315,7 +305,6 @@ export default function App() {
           });
           setParticles((prev) => [...prev, ...newParticles]);
 
-          // Step 4: after eating pause, leap back down to ground
           setTimeout(() => {
             setCatStyle((prev) => ({
               ...prev,
@@ -323,7 +312,6 @@ export default function App() {
               transition: "bottom 0.4s ease-in",
             }));
 
-            // Step 5: restore running animation
             setTimeout(() => {
               setCatStyle(null);
               setCatLeaping(false);
@@ -447,3 +435,37 @@ export default function App() {
           >
             🐱
           </div>
+        )}
+
+        {/* Dog */}
+        <div
+          className="dog"
+          ref={dogRef}
+          onClick={handleDogClick}
+          title="Click me!"
+        >
+          🐶
+        </div>
+
+        {/* Bark bubble */}
+        {dogBarking && (
+          <div className="bark-bubble" style={{ left: "60%" }}>
+            Woof! 🐾
+          </div>
+        )}
+
+        {/* Ground */}
+        <div
+          style={{
+            width: "100%",
+            height: "120px",
+            backgroundColor: "#5a9e3a",
+            position: "relative",
+            zIndex: 3,
+            display: "flex",
+            alignItems: "flex-start",
+            paddingTop: "4px",
+            overflow: "hidden",
+          }}
+        >
+          {Array.from({ length: 30 }).map((_, i) => (
