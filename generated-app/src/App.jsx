@@ -19,6 +19,7 @@ export default function App() {
   const [crowVisible, setCrowVisible] = useState(true);
   const [particles, setParticles] = useState([]);
   const [skyRed, setSkyRed] = useState(false);
+  const [skyGreen, setSkyGreen] = useState(false);
   const [barking, setBarking] = useState(false);
 
   const { catLeaping, catStyle, handleCatClick } = useCatLeap({
@@ -42,12 +43,21 @@ export default function App() {
     setTimeout(() => setBarking(false), 2000);
   };
 
+  const handleSunClick = () => {
+    if (skyGreen) return;
+    setSkyGreen(true);
+    setTimeout(() => setSkyGreen(false), 3000);
+  };
+
+  const skyClass = skyRed ? "sky-red" : skyGreen ? "sky-green" : "";
+  const skyBg = skyRed || skyGreen ? undefined : "#87CEEB";
+
   return (
     <div
-      className={skyRed ? "sky-red" : ""}
+      className={skyClass}
       style={{
         minHeight: "100vh",
-        backgroundColor: skyRed ? undefined : "#87CEEB",
+        backgroundColor: skyBg,
         position: "relative",
         overflow: "hidden",
       }}
@@ -55,7 +65,7 @@ export default function App() {
       <style>{styles}</style>
 
       {/* Sky elements */}
-      <Sky />
+      <Sky onSunClick={handleSunClick} />
 
       {/* Title */}
       <Title />

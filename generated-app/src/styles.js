@@ -79,6 +79,13 @@ export const styles = `
     100% { background-color: #87CEEB; }
   }
 
+  @keyframes skyGreenFlash {
+    0%   { background-color: #87CEEB; }
+    20%  { background-color: #22cc44; }
+    80%  { background-color: #22cc44; }
+    100% { background-color: #87CEEB; }
+  }
+
   .cat {
     position: absolute;
     font-size: 4rem;
@@ -189,5 +196,9 @@ export const styles = `
 
   .sky-red {
     animation: skyFlash 3s ease forwards !important;
+  }
+
+  .sky-green {
+    animation: skyGreenFlash 3s ease forwards !important;
   }
 `;
