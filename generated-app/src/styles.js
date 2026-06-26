@@ -79,21 +79,6 @@ export const styles = `
     100% { background-color: #87CEEB; }
   }
 
-  @keyframes ballBounce {
-    0%   { bottom: 130px; animation-timing-function: ease-in; }
-    40%  { bottom: 280px; animation-timing-function: ease-out; }
-    50%  { bottom: 130px; animation-timing-function: ease-in; }
-    75%  { bottom: 210px; animation-timing-function: ease-out; }
-    85%  { bottom: 130px; animation-timing-function: ease-in; }
-    93%  { bottom: 170px; animation-timing-function: ease-out; }
-    100% { bottom: 130px; }
-  }
-
-  @keyframes ballRoll {
-    0%   { left: -60px; }
-    100% { left: 110%; }
-  }
-
   .cat {
     position: absolute;
     font-size: 4rem;
@@ -204,16 +189,5 @@ export const styles = `
 
   .sky-red {
     animation: skyFlash 3s ease forwards !important;
-  }
-
-  .ball {
-    position: absolute;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 35%, #a8ff78, #2ecc40);
-    box-shadow: 2px 4px 8px rgba(0,0,0,0.3), inset -3px -3px 6px rgba(0,0,0,0.15);
-    animation: ballRoll 5s linear infinite 1s, ballBounce 5s ease infinite 1s;
-    z-index: 6;
   }
 `;
