@@ -31,29 +31,31 @@ const MELODY = [
 const PAD_NOTES = [261.63, 329.63, 392.0]; // C, E, G
 
 function playNote(ctx, masterGain, freq, startTime, duration, volume = 0.18, type = "triangle") {
-  const osc = ctx.createOscillator();
-  const gainNode = ctx.createGain();
+  try {
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
 
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, startTime);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, startTime);
 
-  // Gentle attack and release envelope
-  gainNode.gain.setValueAtTime(0, startTime);
-  gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.05);
-  gainNode.gain.setValueAtTime(volume, startTime + duration - 0.1);
-  gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
+    gainNode.gain.setValueAtTime(0, startTime);
+    gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.05);
+    gainNode.gain.setValueAtTime(volume, startTime + duration - 0.1);
+    gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
 
-  osc.connect(gainNode);
-  gainNode.connect(masterGain);
+    osc.connect(gainNode);
+    gainNode.connect(masterGain);
 
-  osc.start(startTime);
-  osc.stop(startTime + duration + 0.05);
+    osc.start(startTime);
+    osc.stop(startTime + duration + 0.05);
+  } catch (e) {
+    // Silently ignore audio errors on iOS
+  }
 }
 
 function playPad(ctx, masterGain, startTime, duration) {
   PAD_NOTES.forEach((freq) => {
     playNote(ctx, masterGain, freq, startTime, duration, 0.04, "sine");
-    // Add a soft octave above
     playNote(ctx, masterGain, freq * 2, startTime, duration, 0.02, "sine");
   });
 }
@@ -65,25 +67,37 @@ export function useBackgroundMusic() {
   const schedulerRef = useRef(null);
   const nextNoteTimeRef = useRef(0);
   const melodyIndexRef = useRef(0);
-  const padTimerRef = useRef(null);
   const startedRef = useRef(false);
+  const mutedRef = useRef(false);
+
+  // Keep mutedRef in sync so the resume handler can read current value
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
 
   const scheduleMelody = () => {
     const ctx = ctxRef.current;
     const masterGain = masterGainRef.current;
     if (!ctx || !masterGain) return;
 
-    // Schedule notes slightly ahead of time (lookahead scheduling)
-    const LOOKAHEAD = 0.3; // seconds
-    const SCHEDULE_INTERVAL = 100; // ms
+    const LOOKAHEAD = 0.3;
+    const SCHEDULE_INTERVAL = 100;
 
     const schedule = () => {
+      const ctx = ctxRef.current;
+      const masterGain = masterGainRef.current;
+      if (!ctx || !masterGain) return;
+
+      // iOS may suspend the context — try to resume it
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+
       while (nextNoteTimeRef.current < ctx.currentTime + LOOKAHEAD) {
         const { note, dur } = MELODY[melodyIndexRef.current % MELODY.length];
         const freq = PENTATONIC[note];
         playNote(ctx, masterGain, freq, nextNoteTimeRef.current, dur, 0.18, "triangle");
 
-        // Every 4 notes, play a soft pad chord
         if (melodyIndexRef.current % 4 === 0) {
           playPad(ctx, masterGain, nextNoteTimeRef.current, dur * 3.5);
         }
@@ -102,46 +116,74 @@ export function useBackgroundMusic() {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    ctxRef.current = ctx;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
 
-    const masterGain = ctx.createGain();
-    masterGain.gain.setValueAtTime(muted ? 0 : 1, ctx.currentTime);
-    masterGain.connect(ctx.destination);
-    masterGainRef.current = masterGain;
+      const ctx = new AudioCtx();
+      ctxRef.current = ctx;
 
-    nextNoteTimeRef.current = ctx.currentTime + 0.1;
-    scheduleMelody();
+      const masterGain = ctx.createGain();
+      masterGain.gain.setValueAtTime(mutedRef.current ? 0 : 1, ctx.currentTime);
+      masterGain.connect(ctx.destination);
+      masterGainRef.current = masterGain;
+
+      // iOS often starts context in suspended state — resume immediately
+      if (ctx.state === "suspended") {
+        ctx.resume().then(() => {
+          nextNoteTimeRef.current = ctx.currentTime + 0.1;
+          scheduleMelody();
+        }).catch(() => {});
+      } else {
+        nextNoteTimeRef.current = ctx.currentTime + 0.1;
+        scheduleMelody();
+      }
+    } catch (e) {
+      // Audio not supported
+    }
   };
 
   const stop = () => {
     if (schedulerRef.current) clearTimeout(schedulerRef.current);
     if (ctxRef.current) {
-      ctxRef.current.close();
+      try {
+        ctxRef.current.close();
+      } catch (e) {}
       ctxRef.current = null;
     }
     startedRef.current = false;
   };
 
-  // Start music on first user interaction (required by browsers)
+  // Resume context on any touch/click (iOS requires this)
+  const resumeCtx = () => {
+    if (ctxRef.current && ctxRef.current.state === "suspended") {
+      ctxRef.current.resume().catch(() => {});
+    }
+  };
+
   useEffect(() => {
     const handleInteraction = () => {
       start();
-      window.removeEventListener("click", handleInteraction);
-      window.removeEventListener("keydown", handleInteraction);
+      resumeCtx();
     };
 
+    // Use both touchstart and click for iOS compatibility
+    window.addEventListener("touchstart", handleInteraction, { passive: true });
     window.addEventListener("click", handleInteraction);
     window.addEventListener("keydown", handleInteraction);
 
+    // Also resume on any subsequent touch (iOS can re-suspend)
+    window.addEventListener("touchstart", resumeCtx, { passive: true });
+
     return () => {
+      window.removeEventListener("touchstart", handleInteraction);
       window.removeEventListener("click", handleInteraction);
       window.removeEventListener("keydown", handleInteraction);
+      window.removeEventListener("touchstart", resumeCtx);
       stop();
     };
   }, []);
 
-  // Handle mute/unmute
   useEffect(() => {
     if (masterGainRef.current && ctxRef.current) {
       masterGainRef.current.gain.setTargetAtTime(
