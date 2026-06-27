@@ -480,7 +480,7 @@ export default function App() {
             </div>
 
             <h1 className={`text-4xl md:text-5xl font-black mt-4 tracking-tight ${textPrimary}`}>
-              Fresh statements, one fake
+              One’s a fib — can you spot it?
             </h1>
 
             <p className={`mt-3 text-base md:text-lg max-w-2xl mx-auto ${textSecondary}`}>
