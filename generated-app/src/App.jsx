@@ -1,94 +1,137 @@
 import { useState, useEffect } from "react";
-import { quotes } from "./quotes";
+import { triviaQuestions as fallbackQuestions } from "./trivia";
+
+function decodeHTML(html) {
+  const txt = document.createElement("textarea");
+  txt.innerHTML = html;
+  return txt.value;
+}
+
+const CATEGORY_EMOJIS = ["🐾", "🌍", "🔬", "🎨", "🏆", "🎭", "🍕", "🚀", "🎵", "💡"];
 
 function shuffleArray(arr) {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
+async function fetchQuestions() {
+  const res = await fetch(
+    "https://opentdb.com/api.php?amount=10&type=multiple&difficulty=medium&category=27"
+  );
+  const data = await res.json();
+
+  if (data.response_code !== 0 || !data.results?.length) {
+    throw new Error("Bad response from API");
+  }
+
+  return data.results.map((item, i) => {
+    const correct = decodeHTML(item.correct_answer);
+    const options = shuffleArray([
+      correct,
+      ...item.incorrect_answers.map(decodeHTML),
+    ]);
+    return {
+      question: decodeHTML(item.question),
+      options,
+      answer: correct,
+      explanation: `The correct answer is: ${correct}`,
+      emoji: CATEGORY_EMOJIS[i % CATEGORY_EMOJIS.length],
+    };
+  });
+}
+
 export default function App() {
-  const [gameQuotes, setGameQuotes] = useState([]);
+  const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState(null);
+  const [selectedOption, setSelectedOption] = useState(null);
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const startGame = () => {
-    setGameQuotes(shuffleArray(quotes).slice(0, 10));
+  const loadQuestions = async () => {
+    setLoading(true);
+    setError(null);
     setCurrentIndex(0);
-    setSelectedAnswer(null);
+    setSelectedOption(null);
     setScore(0);
     setFinished(false);
+    try {
+      const fetched = await fetchQuestions();
+      setQuestions(fetched);
+    } catch (err) {
+      console.error("Failed to fetch questions, using fallback.", err);
+      const shuffled = shuffleArray(fallbackQuestions).slice(0, 10);
+      setQuestions(shuffled);
+      setError("Couldn't reach the trivia API — using built-in questions instead.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    startGame();
+    loadQuestions();
   }, []);
 
-  const current = gameQuotes[currentIndex];
-  const revealed = selectedAnswer !== null;
-  const isCorrect = selectedAnswer === current?.answer;
+  const current = questions[currentIndex];
+  const revealed = selectedOption !== null;
+  const isCorrect = selectedOption === current?.answer;
 
-  const handleGuess = (person) => {
+  const handleSelect = (option) => {
     if (revealed) return;
-    setSelectedAnswer(person);
-    if (person === current.answer) {
+    setSelectedOption(option);
+    if (option === current.answer) {
       setScore((s) => s + 1);
     }
   };
 
   const handleNext = () => {
-    if (currentIndex + 1 >= gameQuotes.length) {
+    if (currentIndex + 1 >= questions.length) {
       setFinished(true);
     } else {
       setCurrentIndex(currentIndex + 1);
-      setSelectedAnswer(null);
+      setSelectedOption(null);
     }
   };
 
-  const getButtonStyle = (person) => {
-    const base = "flex-1 py-4 px-6 rounded-2xl text-xl font-bold transition-all duration-200 border-4 ";
+  const getOptionStyle = (option) => {
     if (!revealed) {
-      if (person === "Trump") {
-        return base + "bg-red-100 border-red-400 hover:bg-red-200 text-red-700 cursor-pointer";
-      } else {
-        return base + "bg-blue-100 border-blue-400 hover:bg-blue-200 text-blue-700 cursor-pointer";
-      }
+      return "bg-white border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 cursor-pointer";
     }
-    if (person === current.answer) {
-      return base + "bg-green-400 border-green-600 text-white scale-105";
+    if (option === current.answer) {
+      return "bg-green-100 border-2 border-green-500 text-green-800 font-semibold";
     }
-    if (person === selectedAnswer) {
-      return base + "bg-red-400 border-red-600 text-white";
+    if (option === selectedOption) {
+      return "bg-red-100 border-2 border-red-400 text-red-700";
     }
-    return base + "bg-gray-100 border-gray-200 text-gray-400 opacity-50";
+    return "bg-gray-50 border-2 border-gray-200 text-gray-400";
   };
 
-  if (!gameQuotes.length) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100">
-        <div className="text-center text-gray-500 text-xl">Loading...</div>
+        <div className="text-center bg-white rounded-2xl shadow-lg p-10 max-w-md w-full mx-4">
+          <div className="text-6xl mb-4 animate-bounce">🐾</div>
+          <h1 className="text-2xl font-bold text-gray-700 mb-2">Loading Questions...</h1>
+          <p className="text-gray-400">Fetching fresh trivia from the internet!</p>
+        </div>
       </div>
     );
   }
 
   if (finished) {
-    const percentage = Math.round((score / gameQuotes.length) * 100);
-    const medal =
-      percentage === 100 ? "🏆" : percentage >= 70 ? "🥈" : percentage >= 40 ? "🥉" : "😅";
-
+    const percentage = Math.round((score / questions.length) * 100);
+    const medal = percentage === 100 ? "🏆" : percentage >= 70 ? "🥈" : percentage >= 40 ? "🥉" : "😅";
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-red-100 via-white to-blue-100">
-        <div className="text-center bg-white rounded-3xl shadow-2xl p-12 max-w-md w-full mx-4">
-          <div className="text-7xl mb-4">{medal}</div>
-          <h1 className="text-4xl font-extrabold mb-2 text-gray-800">Game Over!</h1>
-          <p className="text-gray-500 mb-2 text-lg">You scored</p>
-          <p className="text-6xl font-bold text-blue-600 mb-1">
-            {score} / {gameQuotes.length}
-          </p>
-          <p className="text-gray-400 mb-8 text-lg">{percentage}% correct</p>
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-center bg-white rounded-2xl shadow-lg p-10 max-w-md w-full mx-4">
+          <div className="text-6xl mb-4">{medal}</div>
+          <h1 className="text-3xl font-bold mb-2 text-green-600">Game Over!</h1>
+          <p className="text-gray-600 mb-2">You scored</p>
+          <p className="text-5xl font-bold text-blue-600 mb-1">{score} / {questions.length}</p>
+          <p className="text-gray-400 mb-6">{percentage}% correct</p>
           <button
-            onClick={startGame}
-            className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-4 px-10 rounded-2xl text-xl transition-all duration-200 shadow-lg"
+            onClick={loadQuestions}
+            className="bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
           >
             Play Again 🎉
           </button>
@@ -98,64 +141,53 @@ export default function App() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-red-100 via-white to-blue-100">
-      <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-2xl w-full mx-4">
+    <div className="flex items-center justify-center min-h-screen bg-gray-100">
+      <div className="bg-white rounded-2xl shadow-lg p-8 max-w-lg w-full mx-4">
         {/* Header */}
         <div className="text-center mb-6">
-          <h1 className="text-4xl font-extrabold text-gray-800 mb-1">
-            🇺🇸 Trump or Obama?
-          </h1>
-          <p className="text-gray-400 text-sm">
-            Question {currentIndex + 1} of {gameQuotes.length} &nbsp;|&nbsp; Score: {score}
+          <h1 className="text-3xl font-bold text-gray-800">🐾 Animal Trivia</h1>
+          <p className="text-sm text-gray-400 mt-1">
+            Question {currentIndex + 1} of {questions.length} &nbsp;|&nbsp; Score: {score}
           </p>
+          {error && (
+            <p className="text-xs text-orange-400 mt-1">{error}</p>
+          )}
         </div>
 
         {/* Progress Bar */}
         <div className="w-full bg-gray-200 rounded-full h-2 mb-8">
           <div
-            className="bg-gradient-to-r from-red-400 to-blue-400 h-2 rounded-full transition-all duration-500"
-            style={{ width: `${((currentIndex + 1) / gameQuotes.length) * 100}%` }}
+            className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+            style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
           />
         </div>
 
-        {/* Quote */}
-        <div className="bg-gray-50 border-l-4 border-gray-300 rounded-2xl p-6 mb-8 shadow-inner">
-          <p className="text-2xl font-semibold text-gray-800 text-center italic leading-relaxed">
-            "{current.quote}"
-          </p>
+        {/* Emoji */}
+        <div className="text-center text-7xl mb-6">{current.emoji}</div>
+
+        {/* Question */}
+        <div className="bg-blue-50 rounded-xl p-5 mb-6">
+          <p className="text-lg font-semibold text-gray-800 text-center">{current.question}</p>
         </div>
 
-        {/* Guess Buttons */}
-        <div className="flex gap-4 mb-6">
-          <button
-            onClick={() => handleGuess("Trump")}
-            className={getButtonStyle("Trump")}
-          >
-            🔴 Trump
-          </button>
-          <button
-            onClick={() => handleGuess("Obama")}
-            className={getButtonStyle("Obama")}
-          >
-            🔵 Obama
-          </button>
+        {/* Options */}
+        <div className="grid grid-cols-1 gap-3 mb-6">
+          {current.options.map((option) => (
+            <button
+              key={option}
+              onClick={() => handleSelect(option)}
+              className={`w-full text-left px-5 py-3 rounded-xl transition-all duration-200 ${getOptionStyle(option)}`}
+            >
+              {option}
+            </button>
+          ))}
         </div>
 
         {/* Feedback */}
         {revealed && (
-          <div
-            className={`rounded-2xl p-5 mb-6 text-center border-2 ${
-              isCorrect
-                ? "bg-green-50 border-green-300"
-                : "bg-red-50 border-red-300"
-            }`}
-          >
-            <p
-              className={`font-extrabold text-2xl mb-2 ${
-                isCorrect ? "text-green-600" : "text-red-500"
-              }`}
-            >
-              {isCorrect ? "✅ Correct!" : `❌ It was ${current.answer}!`}
+          <div className={`rounded-xl p-4 mb-6 text-center ${isCorrect ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+            <p className={`font-bold text-lg mb-1 ${isCorrect ? "text-green-600" : "text-red-500"}`}>
+              {isCorrect ? "✅ Correct!" : "❌ Wrong!"}
             </p>
             <p className="text-gray-600 text-sm">{current.explanation}</p>
           </div>
@@ -166,9 +198,9 @@ export default function App() {
           <div className="flex justify-center">
             <button
               onClick={handleNext}
-              className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-3 px-10 rounded-2xl text-lg transition-all duration-200 shadow-md"
+              className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
             >
-              {currentIndex + 1 >= gameQuotes.length ? "See Results 🎉" : "Next Quote →"}
+              {currentIndex + 1 >= questions.length ? "See Results 🎉" : "Next Question →"}
             </button>
           </div>
         )}

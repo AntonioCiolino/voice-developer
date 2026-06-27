@@ -406,8 +406,11 @@ PHONE_UI = """<!doctype html>
         if (res.ok) {
           status.textContent = `Loaded: "${name}" ✓`;
           status.className = 'ok';
-          // Reload iframe to see loaded app
-          document.getElementById('preview').src = document.getElementById('preview').src;
+          // Wait for files to settle, then hard-reload iframe with cache bust
+          setTimeout(() => {
+            const iframe = document.getElementById('preview');
+            iframe.src = `${appUrl}?t=${Date.now()}`;
+          }, 500);
         } else {
           status.textContent = data.detail || 'Load failed';
           status.className = 'err';
