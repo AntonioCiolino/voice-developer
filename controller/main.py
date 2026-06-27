@@ -64,8 +64,19 @@ PHONE_UI = """<!doctype html>
     #log { max-height: 0; overflow: hidden; transition: max-height 0.2s; background: #18181b; border-radius: 8px; padding: 0 12px; font-size: 11px; color: #a1a1aa; font-family: monospace; line-height: 1.4; }
     #log.expanded { max-height: 200px; padding: 8px 12px; overflow-y: auto; }
     #actions { display: flex; gap: 8px; margin-top: 8px; }
-    #saveBtn, #newBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
-    #saveBtn:hover, #newBtn:hover { background: #a1a1aa; }
+    #saveBtn, #newBtn, #loadBtn, #refreshBtn, #undoBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
+    #saveBtn:hover, #newBtn:hover, #loadBtn:hover { background: #a1a1aa; }
+    #refreshBtn, #undoBtn { flex: 0.2; font-size: 14px; }
+    #refreshBtn:hover, #undoBtn:hover { background: #9ca3af; }
+    #loadModal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 999; }
+    #loadModal.open { display: flex; align-items: center; justify-content: center; }
+    #loadBox { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 400px; max-height: 70vh; overflow-y: auto; padding: 20px; }
+    #loadBox h2 { color: #fff; margin: 0 0 12px; font-size: 16px; }
+    #appsList { display: flex; flex-direction: column; gap: 8px; }
+    .appItem { background: #27272a; border: 1px solid #3f3f46; border-radius: 8px; padding: 12px; cursor: pointer; }
+    .appItem:hover { background: #3f3f46; border-color: #6366f1; }
+    .appItem-name { color: #fff; font-weight: 600; font-size: 13px; }
+    .appItem-info { color: #a1a1aa; font-size: 11px; margin-top: 4px; }
     #modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 999; }
     #modal.open { display: flex; }
     #modalContent { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; padding: 20px; width: 90%; max-width: 300px; }
@@ -90,7 +101,17 @@ PHONE_UI = """<!doctype html>
     <div id="log"></div>
     <div id="actions">
       <button id="saveBtn" onclick="openSaveModal()">Save App</button>
+      <button id="loadBtn" onclick="openLoadModal()">Load App</button>
       <button id="newBtn" onclick="newApp()">New App</button>
+      <button id="refreshBtn" onclick="refreshApp()">⟳</button>
+      <button id="undoBtn" onclick="undo()">↶</button>
+    </div>
+  </div>
+
+  <div id="loadModal" onclick="if(event.target===this)closeLoadModal()">
+    <div id="loadBox">
+      <h2>Load App</h2>
+      <div id="appsList"></div>
     </div>
   </div>
 
@@ -226,6 +247,88 @@ PHONE_UI = """<!doctype html>
         btn.textContent = 'Generate';
       }
     }
+
+    async function openLoadModal() {
+      const appsList = document.getElementById('appsList');
+      appsList.innerHTML = '<p style="color: #a1a1aa; font-size: 12px;">Loading...</p>';
+      document.getElementById('loadModal').classList.add('open');
+      try {
+        const res = await fetch('/list-apps');
+        const data = await res.json();
+        if (res.ok && data.apps.length > 0) {
+          appsList.innerHTML = data.apps.map(app => `
+            <div class="appItem" onclick="loadApp('${app.name}')">
+              <div class="appItem-name">${app.name}</div>
+              <div class="appItem-info">${app.has_history ? '✓ has history' : 'no history'}</div>
+            </div>
+          `).join('');
+        } else {
+          appsList.innerHTML = '<p style="color: #a1a1aa;">No saved apps yet</p>';
+        }
+      } catch (e) {
+        appsList.innerHTML = '<p style="color: #f87171;">Failed to load apps</p>';
+      }
+    }
+
+    function closeLoadModal() {
+      document.getElementById('loadModal').classList.remove('open');
+    }
+
+    async function loadApp(name) {
+      const status = document.getElementById('status');
+      status.textContent = `Loading "${name}"...`;
+      status.className = '';
+      closeLoadModal();
+      try {
+        const res = await fetch('/load-app', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          status.textContent = `Loaded: "${name}" ✓`;
+          status.className = 'ok';
+          refreshApp();
+        } else {
+          status.textContent = data.detail || 'Load failed';
+          status.className = 'err';
+        }
+      } catch (e) {
+        status.textContent = 'Network error';
+        status.className = 'err';
+      }
+    }
+
+    function refreshApp() {
+      const iframe = document.getElementById('preview');
+      iframe.src = iframe.src;
+    }
+
+    async function undo(count = 1) {
+      const status = document.getElementById('status');
+      status.textContent = `Undoing ${count} version${count > 1 ? 's' : ''}...`;
+      status.className = '';
+      try {
+        const res = await fetch('/revert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          status.textContent = `✓ Reverted ${count} version${count > 1 ? 's' : ''}`;
+          status.className = 'ok';
+          refreshApp();
+        } else {
+          status.textContent = data.detail || 'Undo failed';
+          status.className = 'err';
+        }
+      } catch (e) {
+        status.textContent = 'Network error';
+        status.className = 'err';
+      }
+    }
   </script>
 </body>
 </html>"""
@@ -301,6 +404,85 @@ def save_app(req: SaveRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Save failed: {str(e)}")
+
+
+@app.get("/list-apps")
+def list_apps():
+    try:
+        if not SAVED_APPS.exists():
+            return {"status": "ok", "apps": []}
+        apps = []
+        for app_dir in SAVED_APPS.iterdir():
+            if app_dir.is_dir():
+                git_dir = app_dir / ".git"
+                apps.append({
+                    "name": app_dir.name,
+                    "has_history": git_dir.exists(),
+                })
+        return {"status": "ok", "apps": sorted(apps, key=lambda x: x["name"])}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list apps: {str(e)}")
+
+
+class LoadAppRequest(BaseModel):
+    name: str
+
+
+@app.post("/load-app")
+def load_app(req: LoadAppRequest):
+    app_path = SAVED_APPS / req.name
+    if not app_path.exists():
+        raise HTTPException(status_code=404, detail=f"App '{req.name}' not found")
+    try:
+        gen_app_path = REPO_ROOT / "generated-app"
+        if gen_app_path.exists():
+            shutil.rmtree(gen_app_path)
+        shutil.copytree(app_path, gen_app_path)
+        return {"status": "ok", "message": f"Loaded app '{req.name}'"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Load failed: {str(e)}")
+
+
+@app.post("/revert")
+def revert(count: int = 1):
+    """Revert to a previous commit in generated-app."""
+    app_root = REPO_ROOT / "generated-app"
+    try:
+        # Get the commit hash to revert to
+        result = subprocess.run(
+            ["git", "log", "--oneline", f"-{count + 1}"],
+            cwd=str(app_root),
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            raise HTTPException(status_code=400, detail="Not enough commits to revert")
+
+        lines = result.stdout.strip().split("\n")
+        if len(lines) < count + 1:
+            raise HTTPException(status_code=400, detail=f"Only {len(lines) - 1} commits available")
+
+        target_commit = lines[count].split()[0]
+
+        # Reset to that commit
+        result = subprocess.run(
+            ["git", "reset", "--hard", target_commit],
+            cwd=str(app_root),
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            raise HTTPException(status_code=502, detail="Failed to revert")
+
+        return {
+            "status": "ok",
+            "message": f"Reverted {count} version(s)",
+            "commit": target_commit,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Revert failed: {str(e)}")
 
 
 @app.post("/new")
