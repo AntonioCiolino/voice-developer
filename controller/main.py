@@ -134,6 +134,7 @@ PHONE_UI = """<!doctype html>
       <h2 style="color: #fff; margin: 0 0 12px; font-size: 18px;">Plan</h2>
       <div id="planText" style="font-size: 12px; color: #a1a1aa; line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap;"></div>
       <div id="genStatus" style="font-size: 13px; color: #71717a; margin-top: 12px; font-weight: 500;"></div>
+      <div id="genLog" style="font-size: 11px; color: #a1a1aa; font-family: monospace; margin-top: 8px; max-height: 300px; overflow-y: auto; line-height: 1.4; background: #27272a; border-radius: 4px; padding: 8px; border: 1px solid #3f3f46;"></div>
       <button id="closeBtn" onclick="closePlan()" style="margin-top: 12px; background: #3f3f46; color: #fff; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-size: 12px; width: 100%;">Close</button>
     </div>
   </div>
@@ -179,6 +180,7 @@ PHONE_UI = """<!doctype html>
           currentTaskIndex = 0;
           document.getElementById('planText').textContent = data.plan;
           document.getElementById('genStatus').innerHTML = `<strong>Plan ready.</strong> Executing ${data.task_count} tasks...`;
+          document.getElementById('genLog').textContent = '';
           document.getElementById('planModal').style.display = 'flex';
           status.textContent = 'Executing tasks...';
           status.className = '';
@@ -207,6 +209,7 @@ PHONE_UI = """<!doctype html>
       const taskDesc = currentTasks[currentTaskIndex];
       const status = document.getElementById('status');
       const genStatus = document.getElementById('genStatus');
+      const genLog = document.getElementById('genLog');
 
       genStatus.innerHTML = `<strong>Task ${taskNum}/${currentTasks.length}:</strong> ${taskDesc}`;
       status.textContent = `Task ${taskNum}/${currentTasks.length}...`;
@@ -223,6 +226,10 @@ PHONE_UI = """<!doctype html>
           })
         });
         const data = await res.json();
+        if (data.log) {
+          genLog.textContent += `\n--- Task ${taskNum} ---\n` + data.log;
+          genLog.scrollTop = genLog.scrollHeight;
+        }
         if (res.ok) {
           currentTaskIndex++;
           setTimeout(() => executeNextTask(), 500);

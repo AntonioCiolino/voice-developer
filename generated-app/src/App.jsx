@@ -1,178 +1,493 @@
-import React from "react";
-import { useState, useEffect } from "react";
-import { quotes } from "./quotes";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-function shuffleArray(arr) {
-  return [...arr].sort(() => Math.random() - 0.5);
+function createBaseScene() {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x050816);
+  scene.fog = new THREE.Fog(0x050816, 10, 30);
+
+  // Enable gravity in the scene configuration so physics objects can use it.
+  scene.userData.gravity = new THREE.Vector3(0, -9.8, 0);
+
+  return scene;
+}
+
+function createCamera() {
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+  );
+  camera.position.set(4, 3, 7);
+  return camera;
+}
+
+function createRenderer() {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  return renderer;
+}
+
+function createLighting(scene) {
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+  scene.add(ambientLight);
+
+  const hemisphereLight = new THREE.HemisphereLight(0x8ec5ff, 0x1b1b2f, 1.2);
+  scene.add(hemisphereLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5);
+  directionalLight.position.set(5, 8, 6);
+  scene.add(directionalLight);
+
+  const pointLight = new THREE.PointLight(0x22d3ee, 35, 20);
+  pointLight.position.set(-3, 2, 4);
+  scene.add(pointLight);
+
+  return {
+    ambientLight,
+    hemisphereLight,
+    directionalLight,
+    pointLight,
+  };
+}
+
+function createEnvironment(scene) {
+  const floorGeometry = new THREE.PlaneGeometry(30, 30);
+  const floorMaterial = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 1,
+    metalness: 0,
+  });
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -1.5;
+  scene.add(floor);
+
+  const gridHelper = new THREE.GridHelper(30, 30, 0x334155, 0x1e293b);
+  gridHelper.position.y = -1.49;
+  scene.add(gridHelper);
+
+  const clickPlaneGeometry = new THREE.PlaneGeometry(30, 30);
+  const clickPlaneMaterial = new THREE.MeshBasicMaterial({
+    visible: false,
+    side: THREE.DoubleSide,
+  });
+  const clickPlane = new THREE.Mesh(clickPlaneGeometry, clickPlaneMaterial);
+  clickPlane.rotation.x = -Math.PI / 2;
+  clickPlane.position.y = -1.25;
+  scene.add(clickPlane);
+
+  return {
+    floor,
+    floorGeometry,
+    floorMaterial,
+    gridHelper,
+    clickPlane,
+    clickPlaneGeometry,
+    clickPlaneMaterial,
+  };
+}
+
+function createDemoObjects(scene) {
+  const torusGeometry = new THREE.TorusKnotGeometry(1, 0.35, 160, 24);
+  const torusMaterial = new THREE.MeshStandardMaterial({
+    color: 0x22d3ee,
+    metalness: 0.55,
+    roughness: 0.2,
+  });
+  const torusKnot = new THREE.Mesh(torusGeometry, torusMaterial);
+  torusKnot.position.y = 0.5;
+  scene.add(torusKnot);
+
+  const sphereGeometry = new THREE.SphereGeometry(0.45, 32, 32);
+  const sphereMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf97316,
+    metalness: 0.2,
+    roughness: 0.35,
+  });
+  const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+  sphere.position.set(2.2, 0.2, 0.5);
+  scene.add(sphere);
+
+  const boxGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+  const boxMaterial = new THREE.MeshStandardMaterial({
+    color: 0xa855f7,
+    metalness: 0.35,
+    roughness: 0.3,
+  });
+  const box = new THREE.Mesh(boxGeometry, boxMaterial);
+  box.position.set(-2.2, 0.1, -0.5);
+  scene.add(box);
+
+  return {
+    torusKnot,
+    torusGeometry,
+    torusMaterial,
+    sphere,
+    sphereGeometry,
+    sphereMaterial,
+    box,
+    boxGeometry,
+    boxMaterial,
+  };
+}
+
+function createBall(scene, position) {
+  const ballGeometry = new THREE.SphereGeometry(0.25, 24, 24);
+  const ballMaterial = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    metalness: 0.25,
+    roughness: 0.35,
+  });
+
+  const ball = new THREE.Mesh(ballGeometry, ballMaterial);
+  ball.position.copy(position);
+  ball.userData.velocity = new THREE.Vector3(0, 0, 0);
+  ball.userData.radius = 0.25;
+  scene.add(ball);
+
+  return ball;
+}
+
+function disposeObject3D(object) {
+  if (!object) return;
+
+  object.traverse?.((child) => {
+    if (child.geometry) {
+      child.geometry.dispose();
+    }
+
+    if (child.material) {
+      if (Array.isArray(child.material)) {
+        child.material.forEach((material) => material.dispose());
+      } else {
+        child.material.dispose();
+      }
+    }
+  });
 }
 
 export default function App() {
-  const [gameQuotes, setGameQuotes] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState(null);
-  const [score, setScore] = useState(0);
-  const [finished, setFinished] = useState(false);
+  const mountRef = useRef(null);
+  const controlsRef = useRef(null);
+  const cameraRef = useRef(null);
+  const sceneRef = useRef(null);
+  const rendererRef = useRef(null);
+  const assetsRef = useRef({
+    currentSceneId: "demo",
+    scenes: {},
+    loadedAssets: {},
+  });
+  const animationStateRef = useRef({
+    autoRotate: true,
+    torusSpeed: 1,
+    gravity: new THREE.Vector3(0, -9.8, 0),
+  });
 
-  const startGame = () => {
-    setGameQuotes(shuffleArray(quotes).slice(0, 10));
-    setCurrentIndex(0);
-    setSelectedAnswer(null);
-    setScore(0);
-    setFinished(false);
-  };
+  const [autoRotate, setAutoRotate] = useState(true);
+  const [torusSpeed, setTorusSpeed] = useState(1);
+  const [activeSceneId] = useState("demo");
+  const [ballCount, setBallCount] = useState(0);
 
   useEffect(() => {
-    startGame();
+    animationStateRef.current.autoRotate = autoRotate;
+  }, [autoRotate]);
+
+  useEffect(() => {
+    animationStateRef.current.torusSpeed = torusSpeed;
+  }, [torusSpeed]);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+
+    const scene = createBaseScene();
+    sceneRef.current = scene;
+
+    const camera = createCamera();
+    cameraRef.current = camera;
+
+    const renderer = createRenderer();
+    rendererRef.current = renderer;
+    mount.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controlsRef.current = controls;
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.rotateSpeed = 0.6;
+    controls.zoomSpeed = 0.8;
+    controls.panSpeed = 0.8;
+    controls.target.set(0, 0.5, 0);
+
+    createLighting(scene);
+    const environment = createEnvironment(scene);
+    const demoObjects = createDemoObjects(scene);
+
+    assetsRef.current.scenes.demo = {
+      id: "demo",
+      name: "Demo Scene",
+      objects: demoObjects,
+      environment,
+      balls: [],
+    };
+    assetsRef.current.currentSceneId = "demo";
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+
+    const getPointerWorldPosition = (event) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+
+      pointer.set(x, y);
+      raycaster.setFromCamera(pointer, camera);
+
+      const intersections = raycaster.intersectObject(environment.clickPlane, false);
+      return intersections[0]?.point || null;
+    };
+
+    const handlePointerDown = (event) => {
+      const worldPosition = getPointerWorldPosition(event);
+      if (!worldPosition) return;
+
+      const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
+      if (!currentScene) return;
+
+      const ballSpawnPosition = worldPosition.clone();
+      ballSpawnPosition.y = 6;
+
+      const ball = createBall(scene, ballSpawnPosition);
+      ball.userData.velocity.set(0, 0, 0);
+
+      currentScene.balls = currentScene.balls || [];
+      currentScene.balls.push(ball);
+      setBallCount(currentScene.balls.length);
+    };
+
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+
+    const clock = new THREE.Clock();
+    let animationFrameId = 0;
+
+    const animate = () => {
+      animationFrameId = requestAnimationFrame(animate);
+
+      const elapsedTime = clock.getElapsedTime();
+      const deltaTime = clock.getDelta();
+
+      const currentSpeed = animationStateRef.current.torusSpeed;
+      const isAutoRotate = animationStateRef.current.autoRotate;
+      const gravity =
+        scene.userData.gravity || animationStateRef.current.gravity;
+      const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
+
+      if (currentScene?.objects) {
+        const { torusKnot, sphere, box } = currentScene.objects;
+
+        if (isAutoRotate && torusKnot) {
+          torusKnot.rotation.x += 0.8 * deltaTime * currentSpeed;
+          torusKnot.rotation.y += 1.2 * deltaTime * currentSpeed;
+        }
+
+        if (sphere) {
+          sphere.rotation.y += 0.9 * deltaTime;
+          sphere.position.y = 0.2 + Math.sin(elapsedTime * 2.0) * 0.05;
+        }
+
+        if (box) {
+          box.rotation.x += 0.9 * deltaTime;
+          box.rotation.y += 0.8 * deltaTime;
+          box.position.y = 0.1 + Math.cos(elapsedTime * 1.8) * 0.05;
+        }
+
+        if (torusKnot) {
+          torusKnot.position.y = 0.5 + Math.sin(elapsedTime * 1.5) * 0.08;
+        }
+      }
+
+      if (currentScene?.balls?.length) {
+        currentScene.balls.forEach((ball) => {
+          const velocity = ball.userData.velocity;
+          const radius = ball.userData.radius ?? 0.25;
+          const floorY = -1.5 + radius;
+
+          velocity.addScaledVector(gravity, deltaTime);
+          ball.position.addScaledVector(velocity, deltaTime);
+
+          if (ball.position.y <= floorY) {
+            ball.position.y = floorY;
+
+            if (Math.abs(velocity.y) > 0.15) {
+              velocity.y *= -0.45;
+              velocity.x *= 0.98;
+              velocity.z *= 0.98;
+            } else {
+              velocity.y = 0;
+              velocity.x *= 0.9;
+              velocity.z *= 0.9;
+            }
+          }
+
+          ball.rotation.x += 0.4 * deltaTime;
+          ball.rotation.y += 0.6 * deltaTime;
+        });
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    };
+
+    const handleResize = () => {
+      const width = mount.clientWidth || window.innerWidth;
+      const height = mount.clientHeight || window.innerHeight;
+
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    animate();
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.removeEventListener("resize", handleResize);
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+
+      controls.dispose();
+
+      disposeObject3D(environment.floor);
+      disposeObject3D(environment.gridHelper);
+      disposeObject3D(demoObjects.torusKnot);
+      disposeObject3D(demoObjects.sphere);
+      disposeObject3D(demoObjects.box);
+
+      renderer.dispose();
+
+      if (mount.contains(renderer.domElement)) {
+        mount.removeChild(renderer.domElement);
+      }
+
+      controlsRef.current = null;
+      cameraRef.current = null;
+      sceneRef.current = null;
+      rendererRef.current = null;
+      assetsRef.current = {
+        currentSceneId: "demo",
+        scenes: {},
+        loadedAssets: {},
+      };
+    };
   }, []);
 
-  const current = gameQuotes[currentIndex];
-  const revealed = selectedAnswer !== null;
-  const isCorrect = selectedAnswer === current?.answer;
+  const handleResetCamera = () => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
 
-  const handleGuess = (person) => {
-    if (revealed) return;
-    setSelectedAnswer(person);
-    if (person === current.answer) {
-      setScore((s) => s + 1);
-    }
+    if (!camera || !controls) return;
+
+    camera.position.set(4, 3, 7);
+    controls.target.set(0, 0.5, 0);
+    controls.update();
   };
 
-  const handleNext = () => {
-    if (currentIndex + 1 >= gameQuotes.length) {
-      setFinished(true);
-    } else {
-      setCurrentIndex(currentIndex + 1);
-      setSelectedAnswer(null);
-    }
+  const handleToggleAutoRotate = () => {
+    setAutoRotate((value) => !value);
   };
 
-  const getButtonStyle = (person) => {
-    const base = "flex-1 py-4 px-6 rounded-2xl text-xl font-bold transition-all duration-200 border-4 ";
-    if (!revealed) {
-      if (person === "Trump") {
-        return base + "bg-red-100 border-red-400 hover:bg-red-200 text-red-700 cursor-pointer";
-      } else {
-        return base + "bg-blue-100 border-blue-400 hover:bg-blue-200 text-blue-700 cursor-pointer";
-      }
-    }
-    if (person === current.answer) {
-      return base + "bg-green-400 border-green-600 text-white scale-105";
-    }
-    if (person === selectedAnswer) {
-      return base + "bg-red-400 border-red-600 text-white";
-    }
-    return base + "bg-gray-100 border-gray-200 text-gray-400 opacity-50";
-  };
-
-  if (!gameQuotes.length) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100">
-        <div className="text-center text-gray-500 text-xl">Loading...</div>
-      </div>
-    );
-  }
-
-  if (finished) {
-    const percentage = Math.round((score / gameQuotes.length) * 100);
-    const medal =
-      percentage === 100 ? "🏆" : percentage >= 70 ? "🥈" : percentage >= 40 ? "🥉" : "😅";
-
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-red-100 via-white to-blue-100">
-        <div className="text-center bg-white rounded-3xl shadow-2xl p-12 max-w-md w-full mx-4">
-          <div className="text-7xl mb-4">{medal}</div>
-          <h1 className="text-4xl font-extrabold mb-2 text-gray-800">Game Over!</h1>
-          <p className="text-gray-500 mb-2 text-lg">You scored</p>
-          <p className="text-6xl font-bold text-blue-600 mb-1">
-            {score} / {gameQuotes.length}
-          </p>
-          <p className="text-gray-400 mb-8 text-lg">{percentage}% correct</p>
-          <button
-            onClick={startGame}
-            className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-4 px-10 rounded-2xl text-xl transition-all duration-200 shadow-lg"
-          >
-            Play Again 🎉
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const sceneLabel = useMemo(() => {
+    return activeSceneId === "demo" ? "Demo Scene" : activeSceneId;
+  }, [activeSceneId]);
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-red-100 via-white to-blue-100">
-      <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-2xl w-full mx-4">
-        {/* Header */}
-        <div className="text-center mb-6">
-          <h1 className="text-4xl font-extrabold text-gray-800 mb-1">
-            🇺🇸 Trump or Obama?
-          </h1>
-          <p className="text-gray-400 text-sm">
-            Question {currentIndex + 1} of {gameQuotes.length} &nbsp;|&nbsp; Score: {score}
+    <div className="relative w-screen h-screen overflow-hidden bg-black">
+      <div ref={mountRef} className="absolute inset-0" />
+
+      <div className="absolute top-4 left-4 z-10 w-[280px] rounded-2xl border border-white/10 bg-slate-950/70 p-4 text-white shadow-2xl backdrop-blur-md">
+        <div className="mb-3">
+          <h1 className="text-lg font-semibold">3D Scene Controls</h1>
+          <p className="mt-1 text-sm text-slate-300">
+            Orbit the scene, tweak motion, and reset the camera.
           </p>
         </div>
 
-        {/* Progress Bar */}
-        <div className="w-full bg-gray-200 rounded-full h-2 mb-8">
-          <div
-            className="bg-gradient-to-r from-red-400 to-blue-400 h-2 rounded-full transition-all duration-500"
-            style={{ width: `${((currentIndex + 1) / gameQuotes.length) * 100}%` }}
-          />
-        </div>
-
-        {/* Quote */}
-        <div className="bg-gray-50 border-l-4 border-gray-300 rounded-2xl p-6 mb-8 shadow-inner">
-          <p className="text-2xl font-semibold text-gray-800 text-center italic leading-relaxed">
-            "{current.quote}"
-          </p>
-        </div>
-
-        {/* Guess Buttons */}
-        <div className="flex gap-4 mb-6">
-          <button
-            onClick={() => handleGuess("Trump")}
-            className={getButtonStyle("Trump")}
-          >
-            🔴 Trump
-          </button>
-          <button
-            onClick={() => handleGuess("Obama")}
-            className={getButtonStyle("Obama")}
-          >
-            🔵 Obama
-          </button>
-        </div>
-
-        {/* Feedback */}
-        {revealed && (
-          <div
-            className={`rounded-2xl p-5 mb-6 text-center border-2 ${
-              isCorrect
-                ? "bg-green-50 border-green-300"
-                : "bg-red-50 border-red-300"
-            }`}
-          >
-            <p
-              className={`font-extrabold text-2xl mb-2 ${
-                isCorrect ? "text-green-600" : "text-red-500"
-              }`}
-            >
-              {isCorrect ? "✅ Correct!" : `❌ It was ${current.answer}!`}
-            </p>
-            <p className="text-gray-600 text-sm">{current.explanation}</p>
+        <div className="mb-3 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-slate-300">
+          <div className="flex items-center justify-between">
+            <span>Active Scene</span>
+            <span className="text-white">{sceneLabel}</span>
           </div>
-        )}
-
-        {/* Next Button */}
-        {revealed && (
-          <div className="flex justify-center">
-            <button
-              onClick={handleNext}
-              className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-3 px-10 rounded-2xl text-lg transition-all duration-200 shadow-md"
-            >
-              {currentIndex + 1 >= gameQuotes.length ? "See Results 🎉" : "Next Quote →"}
-            </button>
+          <div className="mt-2 flex items-center justify-between">
+            <span>Asset Pipeline</span>
+            <span>Ready</span>
           </div>
-        )}
+          <div className="mt-2 flex items-center justify-between">
+            <span>Balls</span>
+            <span>{ballCount}</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <span>Gravity</span>
+            <span>Enabled</span>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={handleToggleAutoRotate}
+            className="w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-cyan-400"
+          >
+            {autoRotate ? "Pause Rotation" : "Resume Rotation"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResetCamera}
+            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+          >
+            Reset Camera
+          </button>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm text-slate-300">
+              <span>Torus Speed</span>
+              <span>{torusSpeed.toFixed(1)}x</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.1"
+              value={torusSpeed}
+              onChange={(e) => setTorusSpeed(Number(e.target.value))}
+              className="w-full accent-cyan-400"
+            />
+          </label>
+
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-slate-300">
+            <div className="flex items-center justify-between">
+              <span>Auto Rotate</span>
+              <span className={autoRotate ? "text-emerald-400" : "text-rose-400"}>
+                {autoRotate ? "On" : "Off"}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span>Interaction</span>
+              <span>Drag / Scroll / Click</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span>Spawn Balls</span>
+              <span>Click the scene</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
