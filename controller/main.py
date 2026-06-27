@@ -728,7 +728,9 @@ createRoot(document.getElementById("root")).render(
 
         # Create blank App.jsx
         app_jsx = APP_SRC / "App.jsx"
-        app_jsx.write_text("""export default function App() {
+        app_jsx.write_text("""import React from "react";
+
+export default function App() {
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-100">
       <div className="text-center">
