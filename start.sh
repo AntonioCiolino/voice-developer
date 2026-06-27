@@ -16,8 +16,8 @@ echo "---"
 # --- Local IP ---
 LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
 echo -e "Local IP: ${GREEN}$LOCAL_IP${RESET}"
-echo -e "Controller:  ${GREEN}http://$LOCAL_IP:8000${RESET}"
-echo -e "App (phone): ${GREEN}http://$LOCAL_IP:5173${RESET}"
+echo -e "Controller:  ${GREEN}http://$LOCAL_IP:8040${RESET}"
+echo -e "App (phone): ${GREEN}http://$LOCAL_IP:5773${RESET}"
 echo "---"
 
 # --- Controller deps check ---
@@ -31,7 +31,17 @@ echo "Installing controller dependencies..."
 pip install -q -r "$CONTROLLER/requirements.txt"
 
 if [ ! -f "$CONTROLLER/.env" ]; then
-  echo "WARNING: $CONTROLLER/.env not found. Copy .env.example and add your ANTHROPIC_API_KEY."
+  echo "❌ ERROR: $CONTROLLER/.env not found"
+  echo "Create it with your ANTHROPIC_API_KEY:"
+  echo "  echo 'ANTHROPIC_API_KEY=sk-ant-...' > controller/.env"
+  exit 1
+fi
+
+# Check aider is available
+if ! command -v aider &> /dev/null; then
+  echo "❌ ERROR: aider not found"
+  echo "Install it with: pip install aider-chat"
+  exit 1
 fi
 
 # --- App deps check ---
@@ -49,7 +59,7 @@ npm run dev --prefix "$APP" &
 VITE_PID=$!
 
 # FastAPI in foreground
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload --app-dir "$CONTROLLER" &
+uvicorn main:app --host 0.0.0.0 --port 8040 --reload --app-dir "$CONTROLLER" &
 API_PID=$!
 
 # Trap Ctrl+C to kill both

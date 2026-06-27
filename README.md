@@ -43,8 +43,8 @@ voice-developer/
 
 | Service    | Port   | Purpose                        |
 |------------|--------|--------------------------------|
-| Controller | `8000` | Receives POST /generate        |
-| Vite app   | `5173` | The live app (LAN accessible)  |
+| Controller | `8040` | Receives POST /generate        |
+| Vite app   | `5773` | The live app (LAN accessible)  |
 
 Both are bound to `0.0.0.0` — accessible from any device on your local network.
 
@@ -85,8 +85,8 @@ chmod +x start.sh
 ```
 
 This starts:
-- FastAPI controller on `http://0.0.0.0:8000`
-- Vite dev server on `http://0.0.0.0:5173`
+- FastAPI controller on `http://0.0.0.0:8040`
+- Vite dev server on `http://0.0.0.0:5773`
 
 ---
 
@@ -95,7 +95,7 @@ This starts:
 ### Send a prompt from your phone (or anywhere)
 
 ```bash
-curl -X POST http://YOUR_LOCAL_IP:8000/generate \
+curl -X POST http://YOUR_LOCAL_IP:8040/generate \
   -H "Content-Type: application/json" \
   -d '{"prompt": "a red button that counts clicks"}'
 ```
@@ -104,7 +104,7 @@ Or use a voice-to-text app that POSTs to the same endpoint.
 
 ### Watch the app update live
 
-Open `http://YOUR_LOCAL_IP:5173` on your phone. It auto-refreshes via Vite HMR.
+Open `http://YOUR_LOCAL_IP:5773` on your phone. It auto-refreshes via Vite HMR.
 
 ---
 
