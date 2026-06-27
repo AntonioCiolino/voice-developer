@@ -93,6 +93,10 @@ function createEnvironment(scene) {
 }
 
 function createDemoObjects(scene) {
+  const subjectPivot = new THREE.Group();
+  subjectPivot.position.set(0, 0.5, 0);
+  scene.add(subjectPivot);
+
   const torusGeometry = new THREE.TorusKnotGeometry(1, 0.35, 160, 24);
   const torusMaterial = new THREE.MeshStandardMaterial({
     color: 0x22d3ee,
@@ -100,8 +104,8 @@ function createDemoObjects(scene) {
     roughness: 0.2,
   });
   const torusKnot = new THREE.Mesh(torusGeometry, torusMaterial);
-  torusKnot.position.y = 0.5;
-  scene.add(torusKnot);
+  torusKnot.position.set(0, 0, 0);
+  subjectPivot.add(torusKnot);
 
   const sphereGeometry = new THREE.SphereGeometry(0.45, 32, 32);
   const sphereMaterial = new THREE.MeshStandardMaterial({
@@ -110,8 +114,8 @@ function createDemoObjects(scene) {
     roughness: 0.35,
   });
   const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
-  sphere.position.set(2.2, 0.2, 0.5);
-  scene.add(sphere);
+  sphere.position.set(2.2, -0.3, 0.5);
+  subjectPivot.add(sphere);
 
   const boxGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
   const boxMaterial = new THREE.MeshStandardMaterial({
@@ -120,10 +124,11 @@ function createDemoObjects(scene) {
     roughness: 0.3,
   });
   const box = new THREE.Mesh(boxGeometry, boxMaterial);
-  box.position.set(-2.2, 0.1, -0.5);
-  scene.add(box);
+  box.position.set(-2.2, -0.4, -0.5);
+  subjectPivot.add(box);
 
   return {
+    subjectPivot,
     torusKnot,
     torusGeometry,
     torusMaterial,
@@ -218,11 +223,24 @@ export default function App() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controlsRef.current = controls;
     controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.rotateSpeed = 0.6;
-    controls.zoomSpeed = 0.8;
-    controls.panSpeed = 0.8;
+    controls.dampingFactor = 0.06;
+    controls.rotateSpeed = 0.5;
+    controls.zoomSpeed = 0.9;
+    controls.panSpeed = 0.7;
+    controls.enablePan = true;
+    controls.enableRotate = true;
+    controls.enableZoom = true;
+    controls.screenSpacePanning = false;
+    controls.touches.ONE = THREE.TOUCH.ROTATE;
+    controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
     controls.target.set(0, 0.5, 0);
+    controls.minDistance = 2.2;
+    controls.maxDistance = 20;
+    controls.maxPolarAngle = Math.PI - 0.02;
+    controls.minPolarAngle = 0.02;
+    controls.maxAzimuthAngle = Infinity;
+    controls.minAzimuthAngle = -Infinity;
+    controls.update();
 
     createLighting(scene);
     const environment = createEnvironment(scene);
@@ -279,7 +297,8 @@ export default function App() {
       animationFrameId = requestAnimationFrame(animate);
 
       const elapsedTime = clock.getElapsedTime();
-      const deltaTime = clock.getDelta();
+      let deltaTime = clock.getDelta();
+      if (deltaTime === 0) deltaTime = 1 / 60;
 
       const currentSpeed = animationStateRef.current.torusSpeed;
       const isAutoRotate = animationStateRef.current.autoRotate;
@@ -287,8 +306,13 @@ export default function App() {
         scene.userData.gravity || animationStateRef.current.gravity;
       const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
 
+
       if (currentScene?.objects) {
-        const { torusKnot, sphere, box } = currentScene.objects;
+        const { subjectPivot, torusKnot, sphere, box } = currentScene.objects;
+
+        if (subjectPivot && isAutoRotate) {
+          subjectPivot.rotation.y += 0.35 * deltaTime * currentSpeed;
+        }
 
         if (isAutoRotate && torusKnot) {
           torusKnot.rotation.x += 0.8 * deltaTime * currentSpeed;
@@ -297,17 +321,17 @@ export default function App() {
 
         if (sphere) {
           sphere.rotation.y += 0.9 * deltaTime;
-          sphere.position.y = 0.2 + Math.sin(elapsedTime * 2.0) * 0.05;
+          sphere.position.y = -0.3 + Math.sin(elapsedTime * 2.0) * 0.05;
         }
 
         if (box) {
           box.rotation.x += 0.9 * deltaTime;
           box.rotation.y += 0.8 * deltaTime;
-          box.position.y = 0.1 + Math.cos(elapsedTime * 1.8) * 0.05;
+          box.position.y = -0.4 + Math.cos(elapsedTime * 1.8) * 0.05;
         }
 
         if (torusKnot) {
-          torusKnot.position.y = 0.5 + Math.sin(elapsedTime * 1.5) * 0.08;
+          torusKnot.position.y = Math.sin(elapsedTime * 1.5) * 0.08;
         }
       }
 
@@ -351,6 +375,11 @@ export default function App() {
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
       renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+      if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0.5, 0);
+        controlsRef.current.update();
+      }
     };
 
     handleResize();
@@ -366,6 +395,7 @@ export default function App() {
 
       disposeObject3D(environment.floor);
       disposeObject3D(environment.gridHelper);
+      disposeObject3D(demoObjects.subjectPivot);
       disposeObject3D(demoObjects.torusKnot);
       disposeObject3D(demoObjects.sphere);
       disposeObject3D(demoObjects.box);
@@ -481,6 +511,10 @@ export default function App() {
             <div className="mt-2 flex items-center justify-between">
               <span>Interaction</span>
               <span>Drag / Scroll / Click</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span>Orbit Control</span>
+              <span>Enabled</span>
             </div>
             <div className="mt-2 flex items-center justify-between">
               <span>Spawn Balls</span>
