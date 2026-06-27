@@ -156,7 +156,12 @@ function TriviaGame({ onHome }) {
               🏠 Home
             </button>
             <button
-              onClick={() => { setCurrentIndex(0); setSelectedAnswer(null); setScore(0); setFinished(false); }}
+              onClick={() => {
+                setCurrentIndex(0);
+                setSelectedAnswer(null);
+                setScore(0);
+                setFinished(false);
+              }}
               className="flex-1 py-3 rounded-2xl bg-teal-500 hover:bg-teal-600 text-white font-bold text-lg transition"
             >
               🔄 Play Again
@@ -190,7 +195,7 @@ function TriviaGame({ onHome }) {
         <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
           <div
             className="bg-teal-500 h-2 rounded-full transition-all duration-500"
-            style={{ width: `${((currentIndex) / questions.length) * 100}%` }}
+            style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
           />
         </div>
 
@@ -204,7 +209,8 @@ function TriviaGame({ onHome }) {
               let style =
                 "w-full py-3 px-5 rounded-2xl border-2 font-semibold text-left transition-all duration-200 ";
               if (!revealed) {
-                style += "bg-gray-50 border-gray-200 hover:bg-teal-50 hover:border-teal-400 text-gray-700 cursor-pointer";
+                style +=
+                  "bg-gray-50 border-gray-200 hover:bg-teal-50 hover:border-teal-400 text-gray-700 cursor-pointer";
               } else if (option === current.answer) {
                 style += "bg-green-100 border-green-500 text-green-800";
               } else if (option === selectedAnswer) {
@@ -224,7 +230,11 @@ function TriviaGame({ onHome }) {
           </div>
 
           {revealed && (
-            <div className={`mt-5 p-4 rounded-2xl text-sm font-medium ${isCorrect ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+            <div
+              className={`mt-5 p-4 rounded-2xl text-sm font-medium ${
+                isCorrect ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+              }`}
+            >
               {isCorrect ? "🎉 Correct! " : `❌ The answer was "${current.answer}". `}
               {current.explanation}
             </div>
@@ -275,9 +285,15 @@ function QuoteGame({ gameKey, onHome }) {
 
   const getButtonStyle = (person) => {
     const styles = game.playerStyles[person];
-    if (!revealed) return `flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 cursor-pointer ${styles.base}`;
-    if (person === current.answer) return `flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 ${styles.correct}`;
-    if (person === selectedAnswer) return `flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 bg-gray-200 border-gray-400 text-gray-500 line-through`;
+    if (!revealed) {
+      return `flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 cursor-pointer ${styles.base}`;
+    }
+    if (person === current.answer) {
+      return `flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 ${styles.correct}`;
+    }
+    if (person === selectedAnswer) {
+      return "flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 bg-gray-200 border-gray-400 text-gray-500 line-through";
+    }
     return `flex-1 py-4 px-6 rounded-2xl text-lg font-bold transition-all duration-200 border-4 opacity-40 ${styles.base}`;
   };
 
@@ -300,10 +316,165 @@ function QuoteGame({ gameKey, onHome }) {
               🏠 Home
             </button>
             <button
-              onClick={() => { setCurrentIndex(0); setSelectedAnswer(null); setScore(0); setFinished(false); }}
+              onClick={() => {
+                setCurrentIndex(0);
+                setSelectedAnswer(null);
+                setScore(0);
+                setFinished(false);
+              }}
               className="flex-1 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-lg transition"
             >
               🔄 Play Again
             </button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`min-h-screen bg-gradient-to-br ${game.gradient} flex flex-col items-center justify-center p-4`}>
+      <div className="w-full max-w-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <button
+            onClick={onHome}
+            className="text-sm font-semibold text-gray-500 hover:text-gray-800 bg-white px-4 py-2 rounded-xl shadow transition"
+          >
+            ← Home
+          </button>
+          <span className="text-sm font-bold text-gray-500">
+            {currentIndex + 1} / {gameQuotes.length}
+          </span>
+          <span className="text-sm font-bold text-indigo-600 bg-white px-4 py-2 rounded-xl shadow">
+            Score: {score}
+          </span>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
+          <div
+            className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
+            style={{ width: `${((currentIndex + 1) / gameQuotes.length) * 100}%` }}
+          />
+        </div>
+
+        {/* Card */}
+        <div className="bg-white rounded-3xl shadow-2xl p-8 mb-6">
+          <div className="text-5xl text-center mb-4">{game.emoji}</div>
+          <p className="text-xl font-bold text-gray-800 text-center mb-6">{current.quote}</p>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            {game.players.map((person) => {
+              const styles = game.playerStyles[person];
+              return (
+                <button key={person} className={getButtonStyle(person)} onClick={() => handleGuess(person)}>
+                  <span className="mr-2">{styles.emoji}</span>
+                  {person}
+                </button>
+              );
+            })}
+          </div>
+
+          {revealed && (
+            <div
+              className={`mt-5 p-4 rounded-2xl text-sm font-medium ${
+                isCorrect ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+              }`}
+            >
+              {isCorrect ? "🎉 Correct! " : `❌ The answer was "${current.answer}". `}
+              {current.explanation}
+            </div>
+          )}
+        </div>
+
+        {revealed && (
+          <button
+            onClick={handleNext}
+            className="w-full py-4 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-xl shadow-lg transition"
+          >
+            {currentIndex + 1 >= gameQuotes.length ? "See Results 🏁" : "Next Quote →"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HomeScreen({ onSelectGame }) {
+  const cards = [
+    {
+      key: "trumpObama",
+      title: GAMES.trumpObama.title,
+      emoji: GAMES.trumpObama.emoji,
+      gradient: "from-red-100 to-blue-100",
+      description: "Guess whether each quote was said by Trump or Obama.",
+    },
+    {
+      key: "billHillary",
+      title: GAMES.billHillary.title,
+      emoji: GAMES.billHillary.emoji,
+      gradient: "from-purple-100 to-yellow-100",
+      description: "Can you tell Bill and Hillary Clinton apart?",
+    },
+    {
+      key: "jesusOrBuddha",
+      title: GAMES.jesusOrBuddha.title,
+      emoji: GAMES.jesusOrBuddha.emoji,
+      gradient: "from-amber-100 to-sky-100",
+      description: "Match the quote to Jesus or Buddha.",
+    },
+    {
+      key: "dwightOrJim",
+      title: GAMES.dwightOrJim.title,
+      emoji: GAMES.dwightOrJim.emoji,
+      gradient: "from-green-100 to-orange-100",
+      description: "Identify whether the quote came from Dwight or Jim.",
+    },
+    {
+      key: "trivia",
+      title: "Animal Trivia",
+      emoji: "🧠",
+      gradient: "from-teal-100 to-cyan-100",
+      description: "Test your knowledge with fun animal facts.",
+    },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-white to-slate-200 flex items-center justify-center p-6">
+      <div className="w-full max-w-5xl">
+        <div className="text-center mb-10">
+          <div className="text-6xl mb-4">🎮</div>
+          <h1 className="text-4xl md:text-5xl font-black text-gray-800 mb-3">Quote & Trivia Games</h1>
+          <p className="text-lg text-gray-500">Pick a game and see how well you know your quotes and facts.</p>
+        </div>
+
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {cards.map((card) => (
+            <button
+              key={card.key}
+              onClick={() => onSelectGame(card.key)}
+              className={`text-left rounded-3xl p-6 shadow-lg hover:shadow-2xl transition transform hover:-translate-y-1 bg-gradient-to-br ${card.gradient}`}
+            >
+              <div className="text-4xl mb-4">{card.emoji}</div>
+              <h2 className="text-2xl font-extrabold text-gray-800 mb-2">{card.title}</h2>
+              <p className="text-gray-600">{card.description}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [screen, setScreen] = useState("home");
+
+  if (screen === "trivia") return <TriviaGame onHome={() => setScreen("home")} />;
+  if (screen === "trumpObama") return <QuoteGame gameKey="trumpObama" onHome={() => setScreen("home")} />;
+  if (screen === "billHillary") return <QuoteGame gameKey="billHillary" onHome={() => setScreen("home")} />;
+  if (screen === "jesusOrBuddha") return <QuoteGame gameKey="jesusOrBuddha" onHome={() => setScreen("home")} />;
+  if (screen === "dwightOrJim") return <QuoteGame gameKey="dwightOrJim" onHome={() => setScreen("home")} />;
+
+  return <HomeScreen onSelectGame={setScreen} />;
+}
