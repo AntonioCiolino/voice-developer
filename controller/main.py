@@ -636,7 +636,13 @@ def load_app(req: LoadAppRequest):
         gen_app_path = REPO_ROOT / "generated-app"
         if gen_app_path.exists():
             shutil.rmtree(gen_app_path)
-        shutil.copytree(app_path, gen_app_path, dirs_exist_ok=True)
+        # Copy app but skip node_modules
+        shutil.copytree(
+            app_path,
+            gen_app_path,
+            ignore=shutil.ignore_patterns("node_modules", ".vite"),
+            dirs_exist_ok=True,
+        )
 
         # Ensure App.jsx and main.jsx have React import for JSX to work
         for jsx_file in ["App.jsx", "main.jsx"]:
