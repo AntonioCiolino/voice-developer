@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 export default function App() {
   const mountRef = useRef(null);
@@ -25,6 +26,15 @@ export default function App() {
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = true;
     mount.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.enablePan = false;
+    controls.minDistance = 2;
+    controls.maxDistance = 10;
+    controls.target.set(0, 0, 0);
+    controls.update();
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
@@ -75,6 +85,7 @@ export default function App() {
     const animate = () => {
       cube.rotation.x += 0.01;
       cube.rotation.y += 0.012;
+      controls.update();
       renderer.render(scene, camera);
       animationFrameId = window.requestAnimationFrame(animate);
     };
@@ -84,6 +95,7 @@ export default function App() {
     return () => {
       window.removeEventListener("resize", handleResize);
       window.cancelAnimationFrame(animationFrameId);
+      controls.dispose();
       cubeGeometry.dispose();
       cubeMaterial.dispose();
       floorGeometry.dispose();
@@ -101,6 +113,8 @@ export default function App() {
           Target platform: Web browser
           <br />
           Rendering technology: Three.js / WebGL
+          <br />
+          Controls: drag to rotate, scroll/pinch to zoom
         </p>
       </div>
 
