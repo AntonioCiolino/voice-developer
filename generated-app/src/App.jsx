@@ -9,9 +9,13 @@ function decodeHTML(html) {
 
 const CATEGORY_EMOJIS = ["🐾", "🌍", "🔬", "🎨", "🏆", "🎭", "🍕", "🚀", "🎵", "💡"];
 
+function shuffleArray(arr) {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
+
 async function fetchQuestions() {
   const res = await fetch(
-    "https://opentdb.com/api.php?amount=10&type=boolean&difficulty=medium&category=27"
+    "https://opentdb.com/api.php?amount=10&type=multiple&difficulty=medium"
   );
   const data = await res.json();
 
@@ -19,17 +23,27 @@ async function fetchQuestions() {
     throw new Error("Bad response from API");
   }
 
-  return data.results.map((item, i) => ({
-    question: decodeHTML(item.question),
-    answer: `${item.correct_answer === "True" ? "✅ True" : "❌ False"} — Category: ${decodeHTML(item.category)}`,
-    emoji: CATEGORY_EMOJIS[i % CATEGORY_EMOJIS.length],
-  }));
+  return data.results.map((item, i) => {
+    const correct = decodeHTML(item.correct_answer);
+    const options = shuffleArray([
+      correct,
+      ...item.incorrect_answers.map(decodeHTML),
+    ]);
+    return {
+      question: decodeHTML(item.question),
+      options,
+      answer: correct,
+      explanation: `The correct answer is: ${correct}`,
+      emoji: CATEGORY_EMOJIS[i % CATEGORY_EMOJIS.length],
+    };
+  });
 }
 
 export default function App() {
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [revealed, setRevealed] = useState(false);
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -38,15 +52,15 @@ export default function App() {
     setLoading(true);
     setError(null);
     setCurrentIndex(0);
-    setRevealed(false);
+    setSelectedOption(null);
+    setScore(0);
     setFinished(false);
     try {
       const fetched = await fetchQuestions();
       setQuestions(fetched);
     } catch (err) {
       console.error("Failed to fetch questions, using fallback.", err);
-      // Shuffle fallback questions and pick 10
-      const shuffled = [...fallbackQuestions].sort(() => Math.random() - 0.5).slice(0, 10);
+      const shuffled = shuffleArray(fallbackQuestions).slice(0, 10);
       setQuestions(shuffled);
       setError("Couldn't reach the trivia API — using built-in questions instead.");
     } finally {
@@ -59,20 +73,37 @@ export default function App() {
   }, []);
 
   const current = questions[currentIndex];
+  const revealed = selectedOption !== null;
+  const isCorrect = selectedOption === current?.answer;
 
-  const handleReveal = () => setRevealed(true);
+  const handleSelect = (option) => {
+    if (revealed) return;
+    setSelectedOption(option);
+    if (option === current.answer) {
+      setScore((s) => s + 1);
+    }
+  };
 
   const handleNext = () => {
     if (currentIndex + 1 >= questions.length) {
       setFinished(true);
     } else {
       setCurrentIndex(currentIndex + 1);
-      setRevealed(false);
+      setSelectedOption(null);
     }
   };
 
-  const handlePlayAgain = () => {
-    loadQuestions();
+  const getOptionStyle = (option) => {
+    if (!revealed) {
+      return "bg-white border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 cursor-pointer";
+    }
+    if (option === current.answer) {
+      return "bg-green-100 border-2 border-green-500 text-green-800 font-semibold";
+    }
+    if (option === selectedOption) {
+      return "bg-red-100 border-2 border-red-400 text-red-700";
+    }
+    return "bg-gray-50 border-2 border-gray-200 text-gray-400";
   };
 
   if (loading) {
@@ -81,24 +112,28 @@ export default function App() {
         <div className="text-center bg-white rounded-2xl shadow-lg p-10 max-w-md w-full mx-4">
           <div className="text-6xl mb-4 animate-bounce">🐾</div>
           <h1 className="text-2xl font-bold text-gray-700 mb-2">Loading Questions...</h1>
-          <p className="text-gray-400">Fetching fresh animal trivia from the internet!</p>
+          <p className="text-gray-400">Fetching fresh trivia from the internet!</p>
         </div>
       </div>
     );
   }
 
   if (finished) {
+    const percentage = Math.round((score / questions.length) * 100);
+    const medal = percentage === 100 ? "🏆" : percentage >= 70 ? "🥈" : percentage >= 40 ? "🥉" : "😅";
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100">
         <div className="text-center bg-white rounded-2xl shadow-lg p-10 max-w-md w-full mx-4">
-          <div className="text-6xl mb-4">🎉</div>
+          <div className="text-6xl mb-4">{medal}</div>
           <h1 className="text-3xl font-bold mb-2 text-green-600">Game Over!</h1>
-          <p className="text-gray-600 mb-6">You've gone through all the animal trivia questions!</p>
+          <p className="text-gray-600 mb-2">You scored</p>
+          <p className="text-5xl font-bold text-blue-600 mb-1">{score} / {questions.length}</p>
+          <p className="text-gray-400 mb-6">{percentage}% correct</p>
           <button
-            onClick={handlePlayAgain}
+            onClick={loadQuestions}
             className="bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
           >
-            Play Again with New Questions 🐾
+            Play Again 🎉
           </button>
         </div>
       </div>
@@ -112,7 +147,7 @@ export default function App() {
         <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-gray-800">🐾 Animal Trivia</h1>
           <p className="text-sm text-gray-400 mt-1">
-            Question {currentIndex + 1} of {questions.length}
+            Question {currentIndex + 1} of {questions.length} &nbsp;|&nbsp; Score: {score}
           </p>
           {error && (
             <p className="text-xs text-orange-400 mt-1">{error}</p>
@@ -135,36 +170,40 @@ export default function App() {
           <p className="text-lg font-semibold text-gray-800 text-center">{current.question}</p>
         </div>
 
-        {/* Answer */}
-        {revealed ? (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-5 mb-6 text-center">
-            <p className="text-sm font-semibold text-green-500 uppercase tracking-wide mb-1">Answer</p>
-            <p className="text-gray-700 font-medium">{current.answer}</p>
-          </div>
-        ) : (
-          <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-5 mb-6 text-center">
-            <p className="text-gray-400 italic">Think you know the answer? Reveal it when ready!</p>
+        {/* Options */}
+        <div className="grid grid-cols-1 gap-3 mb-6">
+          {current.options.map((option) => (
+            <button
+              key={option}
+              onClick={() => handleSelect(option)}
+              className={`w-full text-left px-5 py-3 rounded-xl transition-all duration-200 ${getOptionStyle(option)}`}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+
+        {/* Feedback */}
+        {revealed && (
+          <div className={`rounded-xl p-4 mb-6 text-center ${isCorrect ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+            <p className={`font-bold text-lg mb-1 ${isCorrect ? "text-green-600" : "text-red-500"}`}>
+              {isCorrect ? "✅ Correct!" : "❌ Wrong!"}
+            </p>
+            <p className="text-gray-600 text-sm">{current.explanation}</p>
           </div>
         )}
 
-        {/* Buttons */}
-        <div className="flex gap-3 justify-center">
-          {!revealed ? (
-            <button
-              onClick={handleReveal}
-              className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
-            >
-              Reveal Answer
-            </button>
-          ) : (
+        {/* Next Button */}
+        {revealed && (
+          <div className="flex justify-center">
             <button
               onClick={handleNext}
-              className="bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
+              className="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
             >
-              {currentIndex + 1 >= questions.length ? "Finish Game 🎉" : "Next Question →"}
+              {currentIndex + 1 >= questions.length ? "See Results 🎉" : "Next Question →"}
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
