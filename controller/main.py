@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
@@ -479,8 +480,6 @@ def save_app(req: SaveRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Save failed: {str(e)}")
 
-
-import re
 
 @app.post("/plan")
 def plan(req: PlanRequest):
