@@ -439,8 +439,8 @@ export default function App() {
         <DecorativeOrbs theme={theme} />
         <div className={`relative w-full max-w-2xl rounded-[2rem] backdrop-blur-xl shadow-2xl border p-6 md:p-8 text-center ${cardBg}`}>
           <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-lg shadow-indigo-200 animate-pulse" />
-          <p className={`text-lg font-semibold ${textPrimary}`}>Loading new trivia set...</p>
-          <p className={`${textSecondary} mt-2`}>Fetching fresh questions for you now.</p>
+          <p className={`text-lg font-semibold ${textPrimary}`}>Loading a new Two Truths and a Lie set...</p>
+          <p className={`${textSecondary} mt-2`}>Fetching fresh statements for you now.</p>
         </div>
       </div>
     );
@@ -452,7 +452,7 @@ export default function App() {
         <DecorativeOrbs theme={theme} />
         <div className={`relative w-full max-w-2xl rounded-[2rem] backdrop-blur-xl shadow-2xl border p-6 md:p-8 text-center ${cardBg}`}>
           <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-rose-500 to-orange-500 shadow-lg shadow-rose-200" />
-          <p className={`text-lg font-semibold ${textPrimary}`}>No trivia available right now.</p>
+          <p className={`text-lg font-semibold ${textPrimary}`}>No statements available right now.</p>
           <button
             type="button"
             onClick={() => loadQuestionSet(subjectIndex)}
@@ -480,7 +480,7 @@ export default function App() {
             </div>
 
             <h1 className={`text-4xl md:text-5xl font-black mt-4 tracking-tight ${textPrimary}`}>
-              Fresh trivia, one fake
+              Fresh statements, one fake
             </h1>
 
             <p className={`mt-3 text-base md:text-lg max-w-2xl mx-auto ${textSecondary}`}>
@@ -532,7 +532,7 @@ export default function App() {
             }`}
           >
             <p className={`font-semibold ${isDark ? "text-amber-200" : "text-amber-900"}`}>
-              Using fallback trivia
+              Using fallback statements
             </p>
             <p className={`text-sm mt-1 ${isDark ? "text-amber-300" : "text-amber-800"}`}>{error}</p>
           </div>
