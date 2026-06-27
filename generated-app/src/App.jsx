@@ -1,24 +1,38 @@
-import Cube from "./components/Cube";
+import { useState } from "react";
+import Sidebar from "./components/Sidebar";
+import TopBar from "./components/TopBar";
+import ViewOne from "./components/ViewOne";
+import ViewTwo from "./components/ViewTwo";
+import ViewThree from "./components/ViewThree";
+import { useClickCount } from "./hooks/useClickCount";
 
 export default function App() {
+  const [activeView, setActiveView] = useState("one");
+  const { count, increment } = useClickCount();
+
+  const viewTitles = {
+    one: "Text Document",
+    two: "3D Cube",
+    three: "Animal Parade",
+  };
+
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">3D Cube Renderer</h1>
-        <p className="text-gray-600 mb-8">Software-rendered — projection, depth sorting &amp; flat shading</p>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            marginTop: "40px",
-            padding: "40px",
-            background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
-            borderRadius: "24px",
-            boxShadow: "0 16px 48px rgba(0,0,0,0.3)",
-          }}
-        >
-          <Cube />
-        </div>
+    <div className="flex flex-col h-screen bg-gray-100 font-sans overflow-hidden">
+      {/* Top Bar */}
+      <TopBar title={viewTitles[activeView]} count={count} onCountClick={increment} />
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <Sidebar activeView={activeView} setActiveView={setActiveView} />
+
+        {/* Main Content */}
+        <main className="flex-1 overflow-auto bg-gray-200 p-6">
+          <div className="h-full">
+            {activeView === "one" && <ViewOne />}
+            {activeView === "two" && <ViewTwo />}
+            {activeView === "three" && <ViewThree />}
+          </div>
+        </main>
       </div>
     </div>
   );
