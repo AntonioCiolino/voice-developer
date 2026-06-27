@@ -445,6 +445,19 @@ export default function App() {
           <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-lg shadow-indigo-200 animate-pulse" />
           <p className={`text-lg font-semibold ${textPrimary}`}>Loading a new Two Truths and a Lie set...</p>
           <p className={`${textSecondary} mt-2`}>Fetching fresh statements for you now.</p>
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              onClick={fullRefresh}
+              className={`rounded-2xl border px-5 py-3 font-semibold transition-colors shadow-sm ${
+                isDark
+                  ? "border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800"
+                  : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400"
+              }`}
+            >
+              Full Refresh
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -457,6 +470,9 @@ export default function App() {
         <div className={`relative w-full max-w-2xl rounded-[2rem] backdrop-blur-xl shadow-2xl border p-6 md:p-8 text-center ${cardBg}`}>
           <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-rose-500 to-orange-500 shadow-lg shadow-rose-200" />
           <p className={`text-lg font-semibold ${textPrimary}`}>No statements available right now.</p>
+          <p className={`${textSecondary} mt-2`}>
+            Try reconnecting and loading a fresh question set.
+          </p>
           <button
             type="button"
             onClick={() => loadQuestionSet(subjectIndex)}
@@ -550,6 +566,9 @@ export default function App() {
               Using fallback statements
             </p>
             <p className={`text-sm mt-1 ${isDark ? "text-amber-300" : "text-amber-800"}`}>{error}</p>
+            <p className={`text-sm mt-2 ${isDark ? "text-amber-300/90" : "text-amber-700"}`}>
+              You can keep playing with the fallback set, or use Full Refresh to reconnect and try again.
+            </p>
           </div>
         )}
 
