@@ -156,14 +156,6 @@ PHONE_UI = """<!doctype html>
     const appUrl = `http://${location.hostname}:5773`;
     document.getElementById('preview').src = appUrl;
 
-    // Check if API key is configured
-    fetch('/check-api').then(res => res.json()).then(data => {
-      if (!data.has_api_key) {
-        document.getElementById('planBtn').style.display = 'none';
-        document.getElementById('btn').style.display = 'none';
-      }
-    });
-
     let currentTasks = [];
     let currentTaskIndex = 0;
     let originalPrompt = '';
