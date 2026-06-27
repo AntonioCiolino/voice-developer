@@ -67,11 +67,24 @@ function createEnvironment(scene) {
   gridHelper.position.y = -1.49;
   scene.add(gridHelper);
 
+  const clickPlaneGeometry = new THREE.PlaneGeometry(30, 30);
+  const clickPlaneMaterial = new THREE.MeshBasicMaterial({
+    visible: false,
+    side: THREE.DoubleSide,
+  });
+  const clickPlane = new THREE.Mesh(clickPlaneGeometry, clickPlaneMaterial);
+  clickPlane.rotation.x = -Math.PI / 2;
+  clickPlane.position.y = -1.25;
+  scene.add(clickPlane);
+
   return {
     floor,
     floorGeometry,
     floorMaterial,
     gridHelper,
+    clickPlane,
+    clickPlaneGeometry,
+    clickPlaneMaterial,
   };
 }
 
@@ -220,7 +233,7 @@ export default function App() {
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    const getPointerIntersection = (event) => {
+    const getPointerWorldPosition = (event) => {
       const rect = renderer.domElement.getBoundingClientRect();
       const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
@@ -228,18 +241,18 @@ export default function App() {
       pointer.set(x, y);
       raycaster.setFromCamera(pointer, camera);
 
-      const intersections = raycaster.intersectObject(environment.floor, false);
-      return intersections[0] || null;
+      const intersections = raycaster.intersectObject(environment.clickPlane, false);
+      return intersections[0]?.point || null;
     };
 
     const handlePointerDown = (event) => {
-      const intersection = getPointerIntersection(event);
-      if (!intersection) return;
+      const worldPosition = getPointerWorldPosition(event);
+      if (!worldPosition) return;
 
       const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
       if (!currentScene) return;
 
-      const ball = createBall(scene, intersection.point);
+      const ball = createBall(scene, worldPosition);
       currentScene.balls = currentScene.balls || [];
       currentScene.balls.push(ball);
     };
@@ -285,7 +298,8 @@ export default function App() {
 
       if (currentScene?.balls?.length) {
         currentScene.balls.forEach((ball, index) => {
-          ball.position.y = Math.max(ball.position.y, -1.25) + Math.sin(elapsedTime * 3 + index) * 0.0005;
+          ball.position.y =
+            Math.max(ball.position.y, -1.25) + Math.sin(elapsedTime * 3 + index) * 0.0005;
           ball.rotation.x += 0.4 * deltaTime;
           ball.rotation.y += 0.6 * deltaTime;
         });
@@ -318,6 +332,7 @@ export default function App() {
 
       disposeObject3D(environment.floor);
       disposeObject3D(environment.gridHelper);
+      disposeObject3D(environment.clickPlane);
       disposeObject3D(demoObjects.torusKnot);
       disposeObject3D(demoObjects.sphere);
       disposeObject3D(demoObjects.box);
