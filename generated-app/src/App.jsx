@@ -2,6 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
+const COLLISION_CATEGORY = {
+  BALL: 1 << 0,
+  TORSO: 1 << 1,
+  SPHERE: 1 << 2,
+  BOX: 1 << 3,
+};
+
 function createBaseScene() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x050816);
@@ -105,6 +112,13 @@ function createDemoObjects(scene) {
   });
   const torusKnot = new THREE.Mesh(torusGeometry, torusMaterial);
   torusKnot.position.set(0, 0, 0);
+  torusKnot.userData.collision = {
+    type: "torus",
+    category: COLLISION_CATEGORY.TORSO,
+    mask: COLLISION_CATEGORY.BALL,
+    majorRadius: 1.0,
+    minorRadius: 0.45,
+  };
   subjectPivot.add(torusKnot);
 
   const sphereGeometry = new THREE.SphereGeometry(0.45, 32, 32);
@@ -115,6 +129,12 @@ function createDemoObjects(scene) {
   });
   const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
   sphere.position.set(2.2, -0.3, 0.5);
+  sphere.userData.collision = {
+    type: "sphere",
+    category: COLLISION_CATEGORY.SPHERE,
+    mask: COLLISION_CATEGORY.BALL,
+    radius: 0.45,
+  };
   subjectPivot.add(sphere);
 
   const boxGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
@@ -125,6 +145,12 @@ function createDemoObjects(scene) {
   });
   const box = new THREE.Mesh(boxGeometry, boxMaterial);
   box.position.set(-2.2, -0.4, -0.5);
+  box.userData.collision = {
+    type: "box",
+    category: COLLISION_CATEGORY.BOX,
+    mask: COLLISION_CATEGORY.BALL,
+    halfExtents: new THREE.Vector3(0.4, 0.4, 0.4),
+  };
   subjectPivot.add(box);
 
   return {
@@ -151,11 +177,45 @@ function createBall(scene, position) {
 
   const ball = new THREE.Mesh(ballGeometry, ballMaterial);
   ball.position.copy(position);
+
+  // Physics state
   ball.userData.velocity = new THREE.Vector3(0, 0, 0);
+  ball.userData.acceleration = new THREE.Vector3(0, 0, 0);
   ball.userData.radius = 0.25;
+  ball.userData.mass = 1;
+  ball.userData.restitution = 0.45;
+  ball.userData.linearDamping = 0.995;
+  ball.userData.forces = new THREE.Vector3(0, 0, 0);
+  ball.userData.collision = {
+    type: "ball",
+    category: COLLISION_CATEGORY.BALL,
+    mask:
+      COLLISION_CATEGORY.BALL |
+      COLLISION_CATEGORY.TORSO |
+      COLLISION_CATEGORY.SPHERE |
+      COLLISION_CATEGORY.BOX,
+  };
+
   scene.add(ball);
 
   return ball;
+}
+
+function applyForce(ball, force) {
+  if (!ball?.userData) return;
+
+  if (!ball.userData.forces) {
+    ball.userData.forces = new THREE.Vector3(0, 0, 0);
+  }
+
+  ball.userData.forces.add(force);
+}
+
+function applyImpulse(ball, impulse) {
+  if (!ball?.userData?.velocity) return;
+
+  const mass = ball.userData.mass ?? 1;
+  ball.userData.velocity.addScaledVector(impulse, 1 / mass);
 }
 
 function disposeObject3D(object) {
@@ -174,6 +234,316 @@ function disposeObject3D(object) {
       }
     }
   });
+}
+
+function canCollide(a, b) {
+  const aCollision = a?.userData?.collision;
+  const bCollision = b?.userData?.collision;
+
+  if (!aCollision || !bCollision) return false;
+
+  return Boolean(
+    (aCollision.mask & bCollision.category) &&
+      (bCollision.mask & aCollision.category)
+  );
+}
+
+function resolveBallTorusCollision(ball, torusKnot) {
+  if (!ball || !torusKnot) return false;
+
+  const radius = ball.userData.radius ?? 0.25;
+
+  torusKnot.updateWorldMatrix(true, false);
+
+  const torusWorldPosition = new THREE.Vector3();
+  const torusWorldQuaternion = new THREE.Quaternion();
+  const torusWorldScale = new THREE.Vector3();
+
+  torusKnot.getWorldPosition(torusWorldPosition);
+  torusKnot.getWorldQuaternion(torusWorldQuaternion);
+  torusKnot.getWorldScale(torusWorldScale);
+
+  const inverseQuaternion = torusWorldQuaternion.clone().invert();
+
+  const ballWorldPosition = ball.getWorldPosition(new THREE.Vector3());
+  const localBallPosition = ballWorldPosition
+    .clone()
+    .sub(torusWorldPosition)
+    .applyQuaternion(inverseQuaternion);
+
+  const majorRadius = 1.0 * Math.max(torusWorldScale.x, torusWorldScale.z);
+  const minorRadius =
+    0.45 * Math.max(torusWorldScale.x, torusWorldScale.y, torusWorldScale.z);
+
+  const xzLength = Math.sqrt(
+    localBallPosition.x * localBallPosition.x +
+      localBallPosition.z * localBallPosition.z
+  );
+
+  const radialOffset = xzLength - majorRadius;
+  const distanceToSurface = Math.sqrt(
+    radialOffset * radialOffset + localBallPosition.y * localBallPosition.y
+  );
+
+  const combinedRadius = minorRadius + radius;
+
+  if (distanceToSurface >= combinedRadius) {
+    return false;
+  }
+
+  const velocity = ball.userData.velocity;
+  const penetrationDepth = combinedRadius - distanceToSurface;
+
+  let localNormal;
+
+  if (distanceToSurface > 1e-6) {
+    const radialDirection =
+      xzLength > 1e-6
+        ? new THREE.Vector3(
+            localBallPosition.x / xzLength,
+            0,
+            localBallPosition.z / xzLength
+          )
+        : new THREE.Vector3(1, 0, 0);
+
+    localNormal = new THREE.Vector3(
+      radialDirection.x * radialOffset,
+      localBallPosition.y,
+      radialDirection.z * radialOffset
+    ).normalize();
+  } else {
+    localNormal = new THREE.Vector3(0, 1, 0);
+  }
+
+  const worldNormal = localNormal
+    .clone()
+    .applyQuaternion(torusWorldQuaternion)
+    .normalize();
+
+  ball.position.addScaledVector(worldNormal, penetrationDepth + 0.001);
+
+  const velocityAlongNormal = velocity.dot(worldNormal);
+  if (velocityAlongNormal < 0) {
+    const restitution = ball.userData.restitution ?? 0.45;
+    velocity.addScaledVector(worldNormal, -(1 + restitution) * velocityAlongNormal);
+    velocity.multiplyScalar(0.985);
+  }
+
+  if (Math.abs(velocity.y) < 0.08) {
+    velocity.y = 0;
+  }
+
+  return true;
+}
+
+function resolveBallSphereCollision(ball, sphere) {
+  if (!ball || !sphere) return false;
+
+  const ballRadius = ball.userData.radius ?? 0.25;
+  const sphereRadius = sphere.userData.collision?.radius ?? 0.45;
+
+  sphere.updateWorldMatrix(true, false);
+
+  const sphereWorldPosition = sphere.getWorldPosition(new THREE.Vector3());
+  const ballWorldPosition = ball.getWorldPosition(new THREE.Vector3());
+  const delta = ballWorldPosition.clone().sub(sphereWorldPosition);
+  const distance = delta.length();
+  const combinedRadius = ballRadius + sphereRadius;
+
+  if (distance >= combinedRadius) {
+    return false;
+  }
+
+  const velocity = ball.userData.velocity;
+  const normal =
+    distance > 1e-6 ? delta.multiplyScalar(1 / distance) : new THREE.Vector3(0, 1, 0);
+  const penetrationDepth = combinedRadius - distance;
+
+  ball.position.addScaledVector(normal, penetrationDepth + 0.001);
+
+  const velocityAlongNormal = velocity.dot(normal);
+  if (velocityAlongNormal < 0) {
+    const restitution = ball.userData.restitution ?? 0.45;
+    velocity.addScaledVector(normal, -(1 + restitution) * velocityAlongNormal);
+    velocity.multiplyScalar(0.985);
+  }
+
+  return true;
+}
+
+function resolveBallBoxCollision(ball, box) {
+  if (!ball || !box) return false;
+
+  const ballRadius = ball.userData.radius ?? 0.25;
+  const halfExtents = box.userData.collision?.halfExtents;
+  if (!halfExtents) return false;
+
+  box.updateWorldMatrix(true, false);
+
+  const boxWorldPosition = box.getWorldPosition(new THREE.Vector3());
+  const boxWorldQuaternion = box.getWorldQuaternion(new THREE.Quaternion());
+  const inverseQuaternion = boxWorldQuaternion.clone().invert();
+
+  const ballWorldPosition = ball.getWorldPosition(new THREE.Vector3());
+  const localBallPosition = ballWorldPosition
+    .clone()
+    .sub(boxWorldPosition)
+    .applyQuaternion(inverseQuaternion);
+
+  const clampedPoint = new THREE.Vector3(
+    THREE.MathUtils.clamp(localBallPosition.x, -halfExtents.x, halfExtents.x),
+    THREE.MathUtils.clamp(localBallPosition.y, -halfExtents.y, halfExtents.y),
+    THREE.MathUtils.clamp(localBallPosition.z, -halfExtents.z, halfExtents.z)
+  );
+
+  const delta = localBallPosition.clone().sub(clampedPoint);
+  const distance = delta.length();
+
+  if (distance >= ballRadius) {
+    return false;
+  }
+
+  const velocity = ball.userData.velocity;
+  const localNormal =
+    distance > 1e-6
+      ? delta.multiplyScalar(1 / distance)
+      : new THREE.Vector3(0, 1, 0);
+
+  const worldNormal = localNormal.clone().applyQuaternion(boxWorldQuaternion).normalize();
+  const penetrationDepth = ballRadius - distance;
+
+  ball.position.addScaledVector(worldNormal, penetrationDepth + 0.001);
+
+  const velocityAlongNormal = velocity.dot(worldNormal);
+  if (velocityAlongNormal < 0) {
+    const restitution = ball.userData.restitution ?? 0.45;
+    velocity.addScaledVector(worldNormal, -(1 + restitution) * velocityAlongNormal);
+    velocity.multiplyScalar(0.985);
+  }
+
+  return true;
+}
+
+function resolveBallBallCollision(ballA, ballB) {
+  if (!ballA || !ballB) return false;
+
+  const radiusA = ballA.userData.radius ?? 0.25;
+  const radiusB = ballB.userData.radius ?? 0.25;
+  const combinedRadius = radiusA + radiusB;
+
+  const positionA = ballA.position;
+  const positionB = ballB.position;
+  const delta = positionA.clone().sub(positionB);
+  const distance = delta.length();
+
+  if (distance >= combinedRadius) {
+    return false;
+  }
+
+  const normal =
+    distance > 1e-6 ? delta.multiplyScalar(1 / distance) : new THREE.Vector3(1, 0, 0);
+  const penetrationDepth = combinedRadius - distance;
+
+  positionA.addScaledVector(normal, penetrationDepth * 0.5 + 0.001);
+  positionB.addScaledVector(normal, -(penetrationDepth * 0.5 + 0.001));
+
+  const velocityA = ballA.userData.velocity;
+  const velocityB = ballB.userData.velocity;
+  const relativeVelocity = velocityA.clone().sub(velocityB);
+  const velocityAlongNormal = relativeVelocity.dot(normal);
+
+  if (velocityAlongNormal < 0) {
+    const restitution = Math.min(
+      ballA.userData.restitution ?? 0.45,
+      ballB.userData.restitution ?? 0.45
+    );
+    const impulseMagnitude = (-(1 + restitution) * velocityAlongNormal) / 2;
+
+    velocityA.addScaledVector(normal, impulseMagnitude);
+    velocityB.addScaledVector(normal, -impulseMagnitude);
+    velocityA.multiplyScalar(0.995);
+    velocityB.multiplyScalar(0.995);
+  }
+
+  return true;
+}
+
+function resolveBallGenericCollision(ball, collider) {
+  if (!ball || !collider?.userData?.collision) return false;
+
+  if (!canCollide(ball, collider)) return false;
+
+  const collisionType = collider.userData.collision.type;
+
+  if (collisionType === "torus") {
+    return resolveBallTorusCollision(ball, collider);
+  }
+
+  if (collisionType === "sphere") {
+    return resolveBallSphereCollision(ball, collider);
+  }
+
+  if (collisionType === "box") {
+    return resolveBallBoxCollision(ball, collider);
+  }
+
+  return false;
+}
+
+function stepBallPhysics(ball, deltaTime, gravity, colliders, balls) {
+  if (!ball) return;
+
+  const velocity = ball.userData.velocity;
+  const radius = ball.userData.radius ?? 0.25;
+  const floorY = -1.5 + radius;
+  const restitution = ball.userData.restitution ?? 0.45;
+  const linearDamping = ball.userData.linearDamping ?? 0.995;
+  const mass = ball.userData.mass ?? 1;
+
+  if (!ball.userData.forces) {
+    ball.userData.forces = new THREE.Vector3(0, 0, 0);
+  }
+
+  const forceAcceleration = ball.userData.forces.clone().multiplyScalar(1 / mass);
+  const totalAcceleration = gravity.clone().add(forceAcceleration);
+
+  velocity.addScaledVector(totalAcceleration, deltaTime);
+  ball.position.addScaledVector(velocity, deltaTime);
+
+  ball.userData.forces.set(0, 0, 0);
+
+  if (Array.isArray(colliders)) {
+    colliders.forEach((collider) => {
+      resolveBallGenericCollision(ball, collider);
+    });
+  }
+
+  if (Array.isArray(balls)) {
+    balls.forEach((otherBall) => {
+      if (otherBall !== ball) {
+        resolveBallBallCollision(ball, otherBall);
+      }
+    });
+  }
+
+  if (ball.position.y <= floorY) {
+    ball.position.y = floorY;
+
+    if (Math.abs(velocity.y) > 0.15) {
+      velocity.y *= -restitution;
+      velocity.x *= 0.98;
+      velocity.z *= 0.98;
+    } else {
+      velocity.y = 0;
+      velocity.x *= 0.9;
+      velocity.z *= 0.9;
+    }
+  }
+
+  velocity.multiplyScalar(linearDamping);
+
+  ball.rotation.x += 0.4 * deltaTime;
+  ball.rotation.y += 0.6 * deltaTime;
 }
 
 export default function App() {
@@ -281,7 +651,18 @@ export default function App() {
       ballSpawnPosition.y = 6;
 
       const ball = createBall(scene, ballSpawnPosition);
+
       ball.userData.velocity.set(0, 0, 0);
+      applyImpulse(
+        ball,
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 2.5,
+          4.5,
+          (Math.random() - 0.5) * 2.5
+        )
+      );
+
+      applyForce(ball, new THREE.Vector3(0, -1, 0));
 
       currentScene.balls = currentScene.balls || [];
       currentScene.balls.push(ball);
@@ -306,7 +687,6 @@ export default function App() {
         scene.userData.gravity || animationStateRef.current.gravity;
       const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
 
-
       if (currentScene?.objects) {
         const { subjectPivot, torusKnot, sphere, box } = currentScene.objects;
 
@@ -321,13 +701,11 @@ export default function App() {
 
         if (sphere) {
           sphere.rotation.y += 0.9 * deltaTime;
-          sphere.position.y = -0.3 + Math.sin(elapsedTime * 2.0) * 0.05;
         }
 
         if (box) {
           box.rotation.x += 0.9 * deltaTime;
           box.rotation.y += 0.8 * deltaTime;
-          box.position.y = -0.4 + Math.cos(elapsedTime * 1.8) * 0.05;
         }
 
         if (torusKnot) {
@@ -336,30 +714,14 @@ export default function App() {
       }
 
       if (currentScene?.balls?.length) {
+        const colliders = [
+          currentScene.objects?.torusKnot,
+          currentScene.objects?.sphere,
+          currentScene.objects?.box,
+        ].filter(Boolean);
+
         currentScene.balls.forEach((ball) => {
-          const velocity = ball.userData.velocity;
-          const radius = ball.userData.radius ?? 0.25;
-          const floorY = -1.5 + radius;
-
-          velocity.addScaledVector(gravity, deltaTime);
-          ball.position.addScaledVector(velocity, deltaTime);
-
-          if (ball.position.y <= floorY) {
-            ball.position.y = floorY;
-
-            if (Math.abs(velocity.y) > 0.15) {
-              velocity.y *= -0.45;
-              velocity.x *= 0.98;
-              velocity.z *= 0.98;
-            } else {
-              velocity.y = 0;
-              velocity.x *= 0.9;
-              velocity.z *= 0.9;
-            }
-          }
-
-          ball.rotation.x += 0.4 * deltaTime;
-          ball.rotation.y += 0.6 * deltaTime;
+          stepBallPhysics(ball, deltaTime, gravity, colliders, currentScene.balls);
         });
       }
 

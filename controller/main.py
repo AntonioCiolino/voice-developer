@@ -156,6 +156,14 @@ PHONE_UI = """<!doctype html>
     const appUrl = `http://${location.hostname}:5773`;
     document.getElementById('preview').src = appUrl;
 
+    // Check if API key is configured
+    fetch('/check-api').then(res => res.json()).then(data => {
+      if (!data.has_api_key) {
+        document.getElementById('planBtn').style.display = 'none';
+        document.getElementById('btn').style.display = 'none';
+      }
+    });
+
     let currentTasks = [];
     let currentTaskIndex = 0;
     let originalPrompt = '';
@@ -434,6 +442,12 @@ def phone_ui():
 @app.get("/status")
 def status():
     return {"status": "running"}
+
+
+@app.get("/check-api")
+def check_api():
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    return {"has_api_key": bool(api_key)}
 
 
 @app.post("/generate")
