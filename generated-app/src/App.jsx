@@ -6,24 +6,32 @@ const SUBJECTS = [
     category: "Nature",
     topic: "nature",
     prompt: "Which statement about nature is the lie?",
+    accent: "from-emerald-500 to-lime-500",
+    glow: "shadow-emerald-200",
   },
   {
     label: "Science",
     category: "Science",
     topic: "science",
     prompt: "Which statement about science is the lie?",
+    accent: "from-cyan-500 to-blue-500",
+    glow: "shadow-cyan-200",
   },
   {
     label: "Animals",
     category: "Animals",
     topic: "animals",
     prompt: "Which statement about animals is the lie?",
+    accent: "from-rose-500 to-orange-500",
+    glow: "shadow-rose-200",
   },
   {
     label: "Space",
     category: "Space",
     topic: "space",
     prompt: "Which statement about space is the lie?",
+    accent: "from-violet-500 to-fuchsia-500",
+    glow: "shadow-violet-200",
   },
 ];
 
@@ -275,6 +283,32 @@ async function fetchQuestionSet(subject) {
   return data.results.map((item) => buildRoundFromTrivia(item, subject));
 }
 
+function DecorativeOrbs() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="absolute -top-24 left-[-5rem] h-72 w-72 rounded-full bg-indigo-300/30 blur-3xl animate-pulse" />
+      <div className="absolute top-1/3 right-[-4rem] h-80 w-80 rounded-full bg-emerald-300/25 blur-3xl animate-pulse [animation-delay:1.5s]" />
+      <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-fuchsia-300/20 blur-3xl animate-pulse [animation-delay:3s]" />
+    </div>
+  );
+}
+
+function StatPill({ label, value, tone = "indigo" }) {
+  const tones = {
+    indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    rose: "bg-rose-50 text-rose-700 border-rose-200",
+    amber: "bg-amber-50 text-amber-700 border-amber-200",
+  };
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${tones[tone]}`}>
+      <p className="text-[11px] uppercase tracking-[0.2em] font-bold opacity-80">{label}</p>
+      <p className="text-lg font-extrabold leading-none mt-1">{value}</p>
+    </div>
+  );
+}
+
 export default function App() {
   const [subjectIndex, setSubjectIndex] = useState(0);
   const [rounds, setRounds] = useState([]);
@@ -357,8 +391,10 @@ export default function App() {
 
   if (loading && !round) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-white to-emerald-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-2xl rounded-3xl bg-white shadow-xl border border-gray-200 p-6 md:p-8 text-center">
+      <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)] flex items-center justify-center p-4">
+        <DecorativeOrbs />
+        <div className="relative w-full max-w-2xl rounded-[2rem] bg-white/80 backdrop-blur-xl shadow-2xl border border-white/70 p-6 md:p-8 text-center">
+          <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-lg shadow-indigo-200 animate-pulse" />
           <p className="text-lg font-semibold text-gray-900">Loading new trivia set...</p>
           <p className="text-gray-600 mt-2">Fetching fresh questions for you now.</p>
         </div>
@@ -368,13 +404,15 @@ export default function App() {
 
   if (!round) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-white to-emerald-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-2xl rounded-3xl bg-white shadow-xl border border-gray-200 p-6 md:p-8 text-center">
+      <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)] flex items-center justify-center p-4">
+        <DecorativeOrbs />
+        <div className="relative w-full max-w-2xl rounded-[2rem] bg-white/80 backdrop-blur-xl shadow-2xl border border-white/70 p-6 md:p-8 text-center">
+          <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-rose-500 to-orange-500 shadow-lg shadow-rose-200" />
           <p className="text-lg font-semibold text-gray-900">No trivia available right now.</p>
           <button
             type="button"
             onClick={() => loadQuestionSet(subjectIndex)}
-            className="mt-4 rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 transition-colors"
+            className="mt-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 px-5 py-3 font-semibold text-white shadow-lg shadow-indigo-200 hover:scale-[1.02] hover:shadow-xl transition-all"
           >
             Try Again
           </button>
@@ -384,40 +422,58 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-100 via-white to-emerald-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl rounded-3xl bg-white shadow-xl border border-gray-200 p-6 md:p-8">
-        <div className="text-center mb-6">
-          <p className="text-sm font-semibold uppercase tracking-widest text-indigo-600">
+    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)] flex items-center justify-center p-4">
+      <DecorativeOrbs />
+
+      <div className="relative w-full max-w-3xl rounded-[2rem] bg-white/80 backdrop-blur-xl shadow-2xl border border-white/70 p-6 md:p-8">
+        <div className="absolute inset-x-0 top-0 h-2 rounded-t-[2rem] bg-gradient-to-r from-indigo-500 via-fuchsia-500 to-emerald-500" />
+
+        <div className="text-center mb-6 md:mb-8">
+          <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm">
+            <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
             Two Truths and a Lie
-          </p>
-          <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mt-2">
+          </div>
+
+          <h1 className="text-4xl md:text-5xl font-black text-gray-900 mt-4 tracking-tight">
             Fresh trivia, one fake
           </h1>
-          <p className="text-gray-600 mt-3">
-            Read the five statements and guess which one is the lie.
+
+          <p className="text-gray-600 mt-3 text-base md:text-lg max-w-2xl mx-auto">
+            Read the statements, trust your instincts, and spot the lie before it slips away.
           </p>
-          <p className="text-sm text-gray-500 mt-2">Topic: {subject.label}</p>
+
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+            <div
+              className={`rounded-full bg-gradient-to-r ${subject.accent} px-4 py-2 text-white font-semibold shadow-lg ${subject.glow}`}
+            >
+              Topic: {subject.label}
+            </div>
+            <div className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 shadow-sm">
+              {rounds.length} rounds of deception
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center justify-between mb-5 text-sm text-gray-500">
-          <span>
-            Round {roundIndex + 1} of {rounds.length}
-          </span>
-          <span>Score: {score}</span>
+        <div className="grid gap-3 md:grid-cols-3 mb-6">
+          <StatPill label="Round" value={`${roundIndex + 1}/${rounds.length}`} tone="indigo" />
+          <StatPill label="Score" value={score} tone="emerald" />
+          <StatPill label="Mood" value={showResult ? "Revealed" : "Guessing"} tone="amber" />
         </div>
 
         {error && (
-          <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="mb-5 rounded-3xl border border-amber-200 bg-amber-50/90 p-4 shadow-sm">
             <p className="font-semibold text-amber-900">Using fallback trivia</p>
             <p className="text-amber-800 text-sm mt-1">{error}</p>
           </div>
         )}
 
-        <div className="rounded-2xl bg-gray-50 p-5 mb-6">
-          <p className="text-sm font-semibold text-emerald-700 mb-2">
+        <div className="rounded-[1.75rem] bg-gradient-to-br from-gray-50 to-white border border-gray-200 p-5 md:p-6 mb-6 shadow-sm">
+          <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-700 mb-2">
             Category: {round.category}
           </p>
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900">{round.prompt}</h2>
+          <h2 className="text-2xl md:text-3xl font-black text-gray-900 leading-tight">
+            {round.prompt}
+          </h2>
         </div>
 
         <div className="space-y-3">
@@ -427,14 +483,16 @@ export default function App() {
             const revealWrong = showResult && isSelected && index !== round.lieIndex;
 
             let buttonClass =
-              "w-full text-left rounded-2xl border px-4 py-4 transition-all duration-200 ";
+              "group w-full text-left rounded-[1.5rem] border px-4 py-4 md:px-5 md:py-5 transition-all duration-200 shadow-sm ";
 
             if (!showResult) {
-              buttonClass += "border-gray-200 hover:border-indigo-400 hover:bg-indigo-50";
+              buttonClass +=
+                "border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/70 hover:-translate-y-0.5 hover:shadow-md";
             } else if (revealCorrect) {
-              buttonClass += "border-emerald-500 bg-emerald-50";
+              buttonClass +=
+                "border-emerald-400 bg-emerald-50 shadow-emerald-100 ring-2 ring-emerald-200";
             } else if (revealWrong) {
-              buttonClass += "border-red-500 bg-red-50";
+              buttonClass += "border-rose-400 bg-rose-50 shadow-rose-100 ring-2 ring-rose-200";
             } else {
               buttonClass += "border-gray-200 bg-gray-100 opacity-70";
             }
@@ -446,19 +504,29 @@ export default function App() {
                 onClick={() => handleGuess(index)}
                 className={buttonClass}
               >
-                <div className="flex items-start gap-3">
-                  <div className="mt-1 h-6 w-6 rounded-full border border-current flex items-center justify-center text-xs font-bold">
+                <div className="flex items-start gap-3 md:gap-4">
+                  <div
+                    className={`mt-0.5 h-7 w-7 rounded-full border flex items-center justify-center text-xs font-black transition-colors ${
+                      showResult
+                        ? "border-current"
+                        : "border-indigo-200 bg-indigo-50 text-indigo-700 group-hover:bg-indigo-100"
+                    }`}
+                  >
                     {index + 1}
                   </div>
-                  <div>
-                    <p className="text-gray-900 font-medium">{statement}</p>
+                  <div className="flex-1">
+                    <p className="text-gray-900 font-semibold text-base md:text-lg leading-snug">
+                      {statement}
+                    </p>
                     {showResult && revealCorrect && (
-                      <p className="text-emerald-700 text-sm mt-2">
+                      <p className="text-emerald-700 text-sm mt-2 font-medium">
                         Correct! This is the lie.
                       </p>
                     )}
                     {showResult && revealWrong && (
-                      <p className="text-red-700 text-sm mt-2">Nope — this one is true.</p>
+                      <p className="text-rose-700 text-sm mt-2 font-medium">
+                        Nope — this one is true.
+                      </p>
                     )}
                   </div>
                 </div>
@@ -468,8 +536,8 @@ export default function App() {
         </div>
 
         {showResult && (
-          <div className="mt-6 rounded-2xl bg-indigo-50 border border-indigo-200 p-5">
-            <p className="font-semibold text-indigo-900">
+          <div className="mt-6 rounded-[1.75rem] bg-gradient-to-r from-indigo-50 via-white to-fuchsia-50 border border-indigo-200 p-5 shadow-sm">
+            <p className="font-black text-indigo-900 text-lg">
               {isCorrect ? "Nice job!" : "Good try!"}
             </p>
             <p className="text-indigo-800 mt-1">{round.explanation}</p>
@@ -480,14 +548,14 @@ export default function App() {
           <button
             type="button"
             onClick={nextRound}
-            className="flex-1 rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-700 transition-colors"
+            className="flex-1 rounded-2xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 px-5 py-3 font-semibold text-white shadow-lg shadow-indigo-200 hover:scale-[1.01] hover:shadow-xl transition-all"
           >
             Next Round
           </button>
           <button
             type="button"
             onClick={restart}
-            className="flex-1 rounded-2xl border border-gray-300 px-5 py-3 font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+            className="flex-1 rounded-2xl border border-gray-300 bg-white px-5 py-3 font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors shadow-sm"
           >
             New Question Set
           </button>
