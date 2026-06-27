@@ -133,6 +133,8 @@ function createDemoObjects(scene) {
     majorRadius: 1.0,
     minorRadius: 0.45,
   };
+  torusKnot.userData.baseColor = new THREE.Color(0x22d3ee);
+  torusKnot.userData.interactionColor = new THREE.Color(0xf97316);
   subjectPivot.add(torusKnot);
 
   const sphereGeometry = new THREE.SphereGeometry(0.45, 32, 32);
@@ -664,7 +666,31 @@ export default function App() {
       return intersections[0]?.point || null;
     };
 
+    const handleTorusInteraction = (event) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+
+      pointer.set(x, y);
+      raycaster.setFromCamera(pointer, camera);
+
+      const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
+      const torusKnot = currentScene?.objects?.torusKnot;
+      if (!torusKnot) return;
+
+      const intersections = raycaster.intersectObject(torusKnot, false);
+      if (intersections.length > 0) {
+        torusKnot.material.color.copy(torusKnot.userData.interactionColor);
+        window.clearTimeout(torusKnot.userData.resetColorTimeout);
+        torusKnot.userData.resetColorTimeout = window.setTimeout(() => {
+          torusKnot.material.color.copy(torusKnot.userData.baseColor);
+        }, 250);
+      }
+    };
+
     const handlePointerDown = (event) => {
+      handleTorusInteraction(event);
+
       const worldPosition = getPointerWorldPosition(event);
       if (!worldPosition) return;
 

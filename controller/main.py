@@ -157,7 +157,7 @@ PHONE_UI = """<!doctype html>
   <iframe id="preview" src="" title="Generated app"></iframe>
 
   <script>
-    const appUrl = `http://${location.hostname}:5773`;
+    const appUrl = `${location.protocol}//${location.hostname}:5773`;
     document.getElementById('preview').src = appUrl;
 
     // Restore processing state from localStorage
