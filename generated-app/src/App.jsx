@@ -546,6 +546,16 @@ function stepBallPhysics(ball, deltaTime, gravity, colliders, balls) {
   ball.rotation.y += 0.6 * deltaTime;
 }
 
+function resolveStaticObjectCollision(object, ball) {
+  if (!object || !ball) return false;
+
+  const collisionType = object.userData?.collision?.type;
+  if (collisionType === "torus") return resolveBallTorusCollision(ball, object);
+  if (collisionType === "sphere") return resolveBallSphereCollision(ball, object);
+  if (collisionType === "box") return resolveBallBoxCollision(ball, object);
+  return false;
+}
+
 export default function App() {
   const mountRef = useRef(null);
   const controlsRef = useRef(null);
@@ -723,6 +733,14 @@ export default function App() {
         currentScene.balls.forEach((ball) => {
           stepBallPhysics(ball, deltaTime, gravity, colliders, currentScene.balls);
         });
+
+        currentScene.balls.forEach((ball) => {
+          colliders.forEach((collider) => {
+            resolveStaticObjectCollision(collider, ball);
+          });
+        });
+
+        setBallCount(currentScene.balls.length);
       }
 
       controls.update();

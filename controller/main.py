@@ -446,7 +446,7 @@ def status():
 
 @app.get("/check-api")
 def check_api():
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     return {"has_api_key": bool(api_key)}
 
 
