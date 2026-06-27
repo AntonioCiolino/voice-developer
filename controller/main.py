@@ -484,8 +484,22 @@ def save_app(req: SaveRequest):
     SAVED_APPS.mkdir(parents=True, exist_ok=True)
 
     try:
+        app_root = REPO_ROOT / "generated-app"
+
+        # Ensure git history exists before saving
+        git_dir = app_root / ".git"
+        if not git_dir.exists():
+            # Initialize git and commit current state
+            subprocess.run(["git", "init"], cwd=str(app_root), capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=str(app_root), capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "initial commit"],
+                cwd=str(app_root),
+                capture_output=True,
+            )
+
         # Copy entire generated-app (includes .git for history)
-        shutil.copytree(REPO_ROOT / "generated-app", save_path)
+        shutil.copytree(app_root, save_path)
         return {
             "status": "ok",
             "message": f"App saved as '{name}'",
