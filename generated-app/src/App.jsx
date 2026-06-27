@@ -185,6 +185,7 @@ export default function App() {
   const [autoRotate, setAutoRotate] = useState(true);
   const [torusSpeed, setTorusSpeed] = useState(1);
   const [activeSceneId] = useState("demo");
+  const [ballCount, setBallCount] = useState(0);
 
   useEffect(() => {
     animationStateRef.current.autoRotate = autoRotate;
@@ -255,6 +256,7 @@ export default function App() {
       const ball = createBall(scene, worldPosition);
       currentScene.balls = currentScene.balls || [];
       currentScene.balls.push(ball);
+      setBallCount(currentScene.balls.length);
     };
 
     renderer.domElement.addEventListener("pointerdown", handlePointerDown);
@@ -398,7 +400,7 @@ export default function App() {
           </div>
           <div className="mt-2 flex items-center justify-between">
             <span>Balls</span>
-            <span>{assetsRef.current.scenes.demo?.balls?.length || 0}</span>
+            <span>{ballCount}</span>
           </div>
         </div>
 
