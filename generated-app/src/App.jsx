@@ -94,24 +94,33 @@ export default function App() {
     gridHelper.position.y = -1.49;
     scene.add(gridHelper);
 
-    let animationFrameId;
+    const clock = new THREE.Clock();
+    let animationFrameId = 0;
 
     const animate = () => {
-      torusKnot.rotation.x += 0.008;
-      torusKnot.rotation.y += 0.012;
+      animationFrameId = requestAnimationFrame(animate);
 
-      sphere.rotation.y += 0.01;
-      box.rotation.x += 0.01;
-      box.rotation.y += 0.008;
+      const elapsedTime = clock.getElapsedTime();
+      const deltaTime = clock.getDelta();
+
+      torusKnot.rotation.x += 0.8 * deltaTime;
+      torusKnot.rotation.y += 1.2 * deltaTime;
+
+      sphere.rotation.y += 0.9 * deltaTime;
+      box.rotation.x += 0.9 * deltaTime;
+      box.rotation.y += 0.8 * deltaTime;
+
+      torusKnot.position.y = 0.5 + Math.sin(elapsedTime * 1.5) * 0.08;
+      sphere.position.y = 0.2 + Math.sin(elapsedTime * 2.0) * 0.05;
+      box.position.y = 0.1 + Math.cos(elapsedTime * 1.8) * 0.05;
 
       controls.update();
       renderer.render(scene, camera);
-      animationFrameId = requestAnimationFrame(animate);
     };
 
     const handleResize = () => {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
+      const width = mount.clientWidth || window.innerWidth;
+      const height = mount.clientHeight || window.innerHeight;
 
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
