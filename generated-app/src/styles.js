@@ -126,46 +126,71 @@ export const styles = `
   }
 
   @keyframes cubeRotate {
-    0%   { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
+    0%   { transform: rotateX(0deg)   rotateY(0deg)   rotateZ(0deg); }
+    25%  { transform: rotateX(90deg)  rotateY(180deg) rotateZ(45deg); }
+    50%  { transform: rotateX(180deg) rotateY(360deg) rotateZ(90deg); }
+    75%  { transform: rotateX(270deg) rotateY(180deg) rotateZ(135deg); }
     100% { transform: rotateX(360deg) rotateY(360deg) rotateZ(180deg); }
   }
   @-webkit-keyframes cubeRotate {
-    0%   { -webkit-transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
+    0%   { -webkit-transform: rotateX(0deg)   rotateY(0deg)   rotateZ(0deg); }
+    25%  { -webkit-transform: rotateX(90deg)  rotateY(180deg) rotateZ(45deg); }
+    50%  { -webkit-transform: rotateX(180deg) rotateY(360deg) rotateZ(90deg); }
+    75%  { -webkit-transform: rotateX(270deg) rotateY(180deg) rotateZ(135deg); }
     100% { -webkit-transform: rotateX(360deg) rotateY(360deg) rotateZ(180deg); }
   }
 
   .cube {
-    width: 80px;
-    height: 80px;
+    width: 100px;
+    height: 100px;
     position: relative;
     transform-style: preserve-3d;
     -webkit-transform-style: preserve-3d;
-    animation: cubeRotate 6s linear infinite;
-    -webkit-animation: cubeRotate 6s linear infinite;
+    animation: cubeRotate 5s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+    -webkit-animation: cubeRotate 5s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
   }
 
   .cube-face {
     position: absolute;
-    width: 80px;
-    height: 80px;
-    background: rgba(255, 255, 255, 0.15);
-    border: 2px solid rgba(255, 255, 255, 0.7);
-    border-radius: 6px;
+    width: 100px;
+    height: 100px;
+    border: 2px solid rgba(255, 255, 255, 0.9);
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.8rem;
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
-    box-shadow: inset 0 0 12px rgba(255,255,255,0.2);
+    font-size: 2.2rem;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    box-shadow:
+      inset 0 0 20px rgba(255, 255, 255, 0.25),
+      0 0 10px rgba(0, 0, 0, 0.2);
   }
 
-  .cube-front  { transform: translateZ(40px); }
-  .cube-back   { transform: rotateY(180deg) translateZ(40px); }
-  .cube-left   { transform: rotateY(-90deg) translateZ(40px); }
-  .cube-right  { transform: rotateY(90deg)  translateZ(40px); }
-  .cube-top    { transform: rotateX(90deg)  translateZ(40px); }
-  .cube-bottom { transform: rotateX(-90deg) translateZ(40px); }
+  .cube-front  {
+    transform: translateZ(50px);
+    background: rgba(99, 179, 237, 0.55);
+  }
+  .cube-back   {
+    transform: rotateY(180deg) translateZ(50px);
+    background: rgba(252, 129, 74, 0.55);
+  }
+  .cube-left   {
+    transform: rotateY(-90deg) translateZ(50px);
+    background: rgba(154, 230, 180, 0.55);
+  }
+  .cube-right  {
+    transform: rotateY(90deg) translateZ(50px);
+    background: rgba(246, 173, 85, 0.55);
+  }
+  .cube-top    {
+    transform: rotateX(90deg) translateZ(50px);
+    background: rgba(183, 148, 246, 0.55);
+  }
+  .cube-bottom {
+    transform: rotateX(-90deg) translateZ(50px);
+    background: rgba(252, 129, 129, 0.55);
+  }
 
   .cat {
     position: absolute;
