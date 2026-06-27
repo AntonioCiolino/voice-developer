@@ -102,6 +102,9 @@ PHONE_UI = """<!doctype html>
     #modalBtns button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
     #saveConfirm { background: #4ade80; color: #000; }
     #cancelModal { background: #3f3f46; color: #fff; }
+    #processing { color: #f97316; font-weight: 600; font-size: 13px; margin-top: 8px; display: none; }
+    #processing.active { display: block; }
+    #processing::before { content: '⏳ '; }
     iframe { flex: 1; border: none; background: #fff; }
   </style>
 </head>
@@ -113,6 +116,7 @@ PHONE_UI = """<!doctype html>
       <button id="btn" onclick="generate()">Generate</button>
     </div>
     <div id="status"></div>
+    <div id="processing"></div>
     <button id="logToggle" onclick="toggleLog()">▶ log</button>
     <div id="log"></div>
     <div id="actions">
@@ -156,6 +160,28 @@ PHONE_UI = """<!doctype html>
     const appUrl = `http://${location.hostname}:5773`;
     document.getElementById('preview').src = appUrl;
 
+    // Restore processing state from localStorage
+    function restoreProcessingState() {
+      const processingMsg = localStorage.getItem('processingMsg');
+      if (processingMsg) {
+        document.getElementById('processing').textContent = processingMsg;
+        document.getElementById('processing').classList.add('active');
+      }
+    }
+
+    function setProcessing(msg) {
+      localStorage.setItem('processingMsg', msg);
+      document.getElementById('processing').textContent = msg;
+      document.getElementById('processing').classList.add('active');
+    }
+
+    function clearProcessing() {
+      localStorage.removeItem('processingMsg');
+      document.getElementById('processing').classList.remove('active');
+    }
+
+    restoreProcessingState();
+
     let currentTasks = [];
     let currentTaskIndex = 0;
     let originalPrompt = '';
@@ -164,6 +190,7 @@ PHONE_UI = """<!doctype html>
       const prompt = document.getElementById('prompt').value.trim();
       if (!prompt) return;
       originalPrompt = prompt;
+      setProcessing('Planning and generating tasks...');
       const status = document.getElementById('status');
       status.textContent = 'Planning...';
       status.className = '';
@@ -201,6 +228,7 @@ PHONE_UI = """<!doctype html>
         document.getElementById('status').textContent = 'Done — app updated';
         document.getElementById('status').className = 'ok';
         document.getElementById('prompt').value = '';
+        clearProcessing();
         setTimeout(() => closePlan(), 1500);
         return;
       }

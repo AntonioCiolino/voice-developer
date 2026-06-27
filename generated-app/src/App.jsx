@@ -63,6 +63,17 @@ function createLighting(scene) {
 }
 
 function createEnvironment(scene) {
+  const greenPlaneGeometry = new THREE.PlaneGeometry(30, 30);
+  const greenPlaneMaterial = new THREE.MeshStandardMaterial({
+    color: 0x16a34a,
+    roughness: 1,
+    metalness: 0,
+  });
+  const greenPlane = new THREE.Mesh(greenPlaneGeometry, greenPlaneMaterial);
+  greenPlane.rotation.x = -Math.PI / 2;
+  greenPlane.position.y = -1.51;
+  scene.add(greenPlane);
+
   const floorGeometry = new THREE.PlaneGeometry(30, 30);
   const floorMaterial = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
@@ -89,6 +100,9 @@ function createEnvironment(scene) {
   scene.add(clickPlane);
 
   return {
+    greenPlane,
+    greenPlaneGeometry,
+    greenPlaneMaterial,
     floor,
     floorGeometry,
     floorMaterial,
@@ -775,6 +789,7 @@ export default function App() {
 
       disposeObject3D(environment.floor);
       disposeObject3D(environment.gridHelper);
+      disposeObject3D(environment.greenPlane);
       disposeObject3D(demoObjects.subjectPivot);
       disposeObject3D(demoObjects.torusKnot);
       disposeObject3D(demoObjects.sphere);
