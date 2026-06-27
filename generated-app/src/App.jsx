@@ -1,9 +1,27 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
 export default function App() {
   const mountRef = useRef(null);
+  const controlsRef = useRef(null);
+  const cameraRef = useRef(null);
+  const torusKnotRef = useRef(null);
+  const animationStateRef = useRef({
+    autoRotate: true,
+    torusSpeed: 1,
+  });
+
+  const [autoRotate, setAutoRotate] = useState(true);
+  const [torusSpeed, setTorusSpeed] = useState(1);
+
+  useEffect(() => {
+    animationStateRef.current.autoRotate = autoRotate;
+  }, [autoRotate]);
+
+  useEffect(() => {
+    animationStateRef.current.torusSpeed = torusSpeed;
+  }, [torusSpeed]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -20,6 +38,7 @@ export default function App() {
       1000
     );
     camera.position.set(4, 3, 7);
+    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -28,6 +47,7 @@ export default function App() {
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    controlsRef.current = controls;
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.rotateSpeed = 0.6;
@@ -68,6 +88,7 @@ export default function App() {
     });
     const torusKnot = new THREE.Mesh(torusGeometry, torusMaterial);
     torusKnot.position.y = 0.5;
+    torusKnotRef.current = torusKnot;
     scene.add(torusKnot);
 
     const sphereGeometry = new THREE.SphereGeometry(0.45, 32, 32);
@@ -103,8 +124,13 @@ export default function App() {
       const elapsedTime = clock.getElapsedTime();
       const deltaTime = clock.getDelta();
 
-      torusKnot.rotation.x += 0.8 * deltaTime;
-      torusKnot.rotation.y += 1.2 * deltaTime;
+      const currentSpeed = animationStateRef.current.torusSpeed;
+      const isAutoRotate = animationStateRef.current.autoRotate;
+
+      if (isAutoRotate) {
+        torusKnot.rotation.x += 0.8 * deltaTime * currentSpeed;
+        torusKnot.rotation.y += 1.2 * deltaTime * currentSpeed;
+      }
 
       sphere.rotation.y += 0.9 * deltaTime;
       box.rotation.x += 0.9 * deltaTime;
@@ -150,8 +176,87 @@ export default function App() {
       if (mount.contains(renderer.domElement)) {
         mount.removeChild(renderer.domElement);
       }
+
+      controlsRef.current = null;
+      cameraRef.current = null;
+      torusKnotRef.current = null;
     };
   }, []);
 
-  return <div ref={mountRef} className="w-screen h-screen overflow-hidden bg-black" />;
+  const handleResetCamera = () => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+
+    if (!camera || !controls) return;
+
+    camera.position.set(4, 3, 7);
+    controls.target.set(0, 0.5, 0);
+    controls.update();
+  };
+
+  const handleToggleAutoRotate = () => {
+    setAutoRotate((value) => !value);
+  };
+
+  return (
+    <div className="relative w-screen h-screen overflow-hidden bg-black">
+      <div ref={mountRef} className="absolute inset-0" />
+
+      <div className="absolute top-4 left-4 z-10 w-[280px] rounded-2xl border border-white/10 bg-slate-950/70 p-4 text-white shadow-2xl backdrop-blur-md">
+        <div className="mb-3">
+          <h1 className="text-lg font-semibold">3D Scene Controls</h1>
+          <p className="mt-1 text-sm text-slate-300">
+            Orbit the scene, tweak motion, and reset the camera.
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={handleToggleAutoRotate}
+            className="w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 transition hover:bg-cyan-400"
+          >
+            {autoRotate ? "Pause Rotation" : "Resume Rotation"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResetCamera}
+            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+          >
+            Reset Camera
+          </button>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm text-slate-300">
+              <span>Torus Speed</span>
+              <span>{torusSpeed.toFixed(1)}x</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="3"
+              step="0.1"
+              value={torusSpeed}
+              onChange={(e) => setTorusSpeed(Number(e.target.value))}
+              className="w-full accent-cyan-400"
+            />
+          </label>
+
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-slate-300">
+            <div className="flex items-center justify-between">
+              <span>Auto Rotate</span>
+              <span className={autoRotate ? "text-emerald-400" : "text-rose-400"}>
+                {autoRotate ? "On" : "Off"}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span>Interaction</span>
+              <span>Drag / Scroll</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
