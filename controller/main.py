@@ -27,6 +27,20 @@ class SaveRequest(BaseModel):
     name: str
 
 
+class PlanRequest(BaseModel):
+    prompt: str
+
+
+class ExecuteTaskRequest(BaseModel):
+    task_num: int
+    task_desc: str
+    original_prompt: str
+
+
+class LoadAppRequest(BaseModel):
+    name: str
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     APP_SRC.mkdir(parents=True, exist_ok=True)
@@ -601,20 +615,6 @@ def list_apps():
         return {"status": "ok", "apps": sorted(apps, key=lambda x: x["name"])}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list apps: {str(e)}")
-
-
-class LoadAppRequest(BaseModel):
-    name: str
-
-
-class PlanRequest(BaseModel):
-    prompt: str
-
-
-class ExecuteTaskRequest(BaseModel):
-    task_num: int
-    task_desc: str
-    original_prompt: str
 
 
 @app.post("/load-app")
