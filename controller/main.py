@@ -57,6 +57,8 @@ PHONE_UI = """<!doctype html>
     #row { display: flex; gap: 8px; }
     button { flex: 1; background: #fff; color: #000; font-weight: 600; font-size: 15px; border: none; border-radius: 10px; padding: 11px; cursor: pointer; }
     button:disabled { opacity: 0.5; }
+    #planBtn { background: #6366f1; color: #fff; }
+    #planBtn:hover { background: #818cf8; }
     #status { font-size: 12px; color: #71717a; min-height: 16px; text-align: center; }
     #status.ok { color: #4ade80; }
     #status.err { color: #f87171; }
@@ -92,6 +94,7 @@ PHONE_UI = """<!doctype html>
   <div id="panel">
     <textarea id="prompt" rows="3" placeholder="Describe the app you want..."></textarea>
     <div id="row">
+      <button id="planBtn" onclick="plan()">Plan</button>
       <button id="btn" onclick="generate()">Generate</button>
     </div>
     <div id="status"></div>
@@ -111,6 +114,16 @@ PHONE_UI = """<!doctype html>
     </div>
   </div>
 
+  <div id="planModal" onclick="if(event.target===this)closePlan()" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; padding: 20px;">
+      <h2 style="color: #fff; margin: 0 0 12px; font-size: 18px;">Plan</h2>
+      <div id="planText" style="font-size: 12px; color: #a1a1aa; line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap;"></div>
+      <div id="genStatus" style="font-size: 13px; color: #71717a; margin-top: 12px; font-weight: 500;"></div>
+      <div id="genLog" style="font-size: 11px; color: #a1a1aa; font-family: monospace; margin-top: 8px; max-height: 0; overflow-y: auto; line-height: 1.4; transition: max-height 0.3s; background: #27272a; border-radius: 4px; padding: 0;"></div>
+      <button id="closeBtn" onclick="closePlan()" style="margin-top: 12px; background: #3f3f46; color: #fff; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-size: 12px; width: 100%;">Close</button>
+    </div>
+  </div>
+
   <div id="modal">
     <div id="modalContent">
       <h2>Save App</h2>
@@ -127,6 +140,99 @@ PHONE_UI = """<!doctype html>
   <script>
     const appUrl = `http://${location.hostname}:5773`;
     document.getElementById('preview').src = appUrl;
+
+    let currentTasks = [];
+    let currentTaskIndex = 0;
+    let originalPrompt = '';
+
+    async function plan() {
+      const prompt = document.getElementById('prompt').value.trim();
+      if (!prompt) return;
+      originalPrompt = prompt;
+      const status = document.getElementById('status');
+      status.textContent = 'Planning...';
+      status.className = '';
+
+      try {
+        const res = await fetch('/plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          currentTasks = data.tasks || [];
+          currentTaskIndex = 0;
+          document.getElementById('planText').textContent = data.plan;
+          document.getElementById('genStatus').innerHTML = `<strong>Plan ready.</strong> Executing ${data.task_count} tasks...`;
+          document.getElementById('genLog').textContent = '';
+          document.getElementById('planModal').style.display = 'flex';
+          status.textContent = 'Executing tasks...';
+          status.className = '';
+          setTimeout(() => executeNextTask(), 300);
+        } else {
+          status.textContent = data.detail || 'Planning failed';
+          status.className = 'err';
+        }
+      } catch (e) {
+        status.textContent = 'Network error';
+        status.className = 'err';
+      }
+    }
+
+    async function executeNextTask() {
+      if (currentTaskIndex >= currentTasks.length) {
+        document.getElementById('genStatus').textContent = `✓ All ${currentTasks.length} tasks complete!`;
+        document.getElementById('status').textContent = 'Done — app updated';
+        document.getElementById('status').className = 'ok';
+        document.getElementById('prompt').value = '';
+        setTimeout(() => closePlan(), 1500);
+        return;
+      }
+
+      const taskNum = currentTaskIndex + 1;
+      const taskDesc = currentTasks[currentTaskIndex];
+      const status = document.getElementById('status');
+      const genStatus = document.getElementById('genStatus');
+      const genLog = document.getElementById('genLog');
+
+      genStatus.innerHTML = `<strong>Task ${taskNum}/${currentTasks.length}:</strong> ${taskDesc}`;
+      status.textContent = `Task ${taskNum}/${currentTasks.length}...`;
+      status.className = '';
+
+      try {
+        const res = await fetch('/execute-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_num: taskNum,
+            task_desc: taskDesc,
+            original_prompt: originalPrompt
+          })
+        });
+        const data = await res.json();
+        if (data.log) {
+          genLog.textContent += `\n--- Task ${taskNum} ---\n` + data.log;
+          genLog.scrollTop = genLog.scrollHeight;
+        }
+        if (res.ok) {
+          currentTaskIndex++;
+          setTimeout(() => executeNextTask(), 500);
+        } else {
+          genStatus.innerHTML += ` <span style="color: #f87171;">[FAILED]</span>`;
+          status.textContent = 'Task failed';
+          status.className = 'err';
+        }
+      } catch (e) {
+        genStatus.innerHTML += ` <span style="color: #f87171;">[ERROR]</span>`;
+        status.textContent = 'Network error';
+        status.className = 'err';
+      }
+    }
+
+    function closePlan() {
+      document.getElementById('planModal').style.display = 'none';
+    }
 
     function toggleLog() {
       const log = document.getElementById('log');
@@ -374,6 +480,112 @@ def save_app(req: SaveRequest):
         raise HTTPException(status_code=500, detail=f"Save failed: {str(e)}")
 
 
+import re
+
+@app.post("/plan")
+def plan(req: PlanRequest):
+    """Generate an architecture plan using OpenAI."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-5.4-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a software architect. Based on complexity:
+
+FOR SIMPLE REQUESTS (rename, small fix, minor change):
+Output only:
+## Tasks
+1) Task one
+2) Task two
+
+FOR COMPLEX REQUESTS (new feature, refactor, system redesign):
+Output full plan:
+## 1) Requirements
+...
+## 2) Architecture
+...
+## 3) Tasks
+1) Task one
+2) Task two
+...
+## 4) Acceptance Criteria
+...
+
+Tasks must use format: "1) Task name", "2) Task name", etc.""",
+                },
+                {"role": "user", "content": req.prompt},
+            ],
+            temperature=0.7,
+            max_completion_tokens=2000,
+        )
+
+        plan_text = response.choices[0].message.content
+
+        # Extract tasks (numbered 1) 2) 3) format)
+        tasks = []
+        for line in plan_text.split("\n"):
+            match = re.match(r"^\s*\d+[\.\)]\s+(.+)$", line.strip())
+            if match:
+                tasks.append(match.group(1).strip())
+
+        return {
+            "status": "ok",
+            "plan": plan_text,
+            "tasks": tasks,
+            "task_count": len(tasks),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")
+
+
+@app.post("/execute-task")
+def execute_task(req: ExecuteTaskRequest):
+    """Execute a single task via aider."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+
+    files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
+    files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
+              if not f.name.endswith(".min.js")]
+
+    task_prompt = f"Task {req.task_num}: {req.task_desc}\n\nContext: {req.original_prompt}"
+
+    try:
+        result = subprocess.run(
+            [
+                "aider",
+                "--yes-always",
+                "--no-pretty",
+                "--model", "gpt-5.4-mini",
+                "--message", task_prompt,
+                *files,
+            ],
+            cwd=str(REPO_ROOT),
+            env={**os.environ, "OPENAI_API_KEY": api_key},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Task timed out")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="aider not found")
+
+    if result.returncode != 0:
+        raise HTTPException(status_code=502, detail=result.stderr[-2000:] or "Task failed")
+
+    return {"status": "ok", "message": f"Task {req.task_num} complete", "log": result.stdout[-1000:]}
+
+
 @app.get("/list-apps")
 def list_apps():
     try:
@@ -394,6 +606,16 @@ def list_apps():
 
 class LoadAppRequest(BaseModel):
     name: str
+
+
+class PlanRequest(BaseModel):
+    prompt: str
+
+
+class ExecuteTaskRequest(BaseModel):
+    task_num: int
+    task_desc: str
+    original_prompt: str
 
 
 @app.post("/load-app")
