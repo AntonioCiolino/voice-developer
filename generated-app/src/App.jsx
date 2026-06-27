@@ -36,6 +36,7 @@ const SUBJECTS = [
 ];
 
 const TRIVIA_API_URL = "https://opentdb.com/api.php?amount=5&type=multiple";
+const THEME_STORAGE_KEY = "two-truths-theme";
 
 function decodeHtmlEntities(text) {
   const textarea = document.createElement("textarea");
@@ -283,26 +284,48 @@ async function fetchQuestionSet(subject) {
   return data.results.map((item) => buildRoundFromTrivia(item, subject));
 }
 
-function DecorativeOrbs() {
+function DecorativeOrbs({ theme }) {
+  const isDark = theme === "dark";
+
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      <div className="absolute -top-24 left-[-5rem] h-72 w-72 rounded-full bg-indigo-300/30 blur-3xl animate-pulse" />
-      <div className="absolute top-1/3 right-[-4rem] h-80 w-80 rounded-full bg-emerald-300/25 blur-3xl animate-pulse [animation-delay:1.5s]" />
-      <div className="absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-fuchsia-300/20 blur-3xl animate-pulse [animation-delay:3s]" />
+      <div
+        className={`absolute -top-24 left-[-5rem] h-72 w-72 rounded-full blur-3xl animate-pulse ${
+          isDark ? "bg-indigo-500/20" : "bg-indigo-300/30"
+        }`}
+      />
+      <div
+        className={`absolute top-1/3 right-[-4rem] h-80 w-80 rounded-full blur-3xl animate-pulse [animation-delay:1.5s] ${
+          isDark ? "bg-emerald-500/15" : "bg-emerald-300/25"
+        }`}
+      />
+      <div
+        className={`absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full blur-3xl animate-pulse [animation-delay:3s] ${
+          isDark ? "bg-fuchsia-500/15" : "bg-fuchsia-300/20"
+        }`}
+      />
     </div>
   );
 }
 
-function StatPill({ label, value, tone = "indigo" }) {
+function StatPill({ label, value, tone = "indigo", theme = "light" }) {
   const tones = {
-    indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
-    emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    rose: "bg-rose-50 text-rose-700 border-rose-200",
-    amber: "bg-amber-50 text-amber-700 border-amber-200",
+    light: {
+      indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
+      emerald: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      rose: "bg-rose-50 text-rose-700 border-rose-200",
+      amber: "bg-amber-50 text-amber-700 border-amber-200",
+    },
+    dark: {
+      indigo: "bg-slate-800 text-indigo-200 border-slate-700",
+      emerald: "bg-slate-800 text-emerald-200 border-slate-700",
+      rose: "bg-slate-800 text-rose-200 border-slate-700",
+      amber: "bg-slate-800 text-amber-200 border-slate-700",
+    },
   };
 
   return (
-    <div className={`rounded-2xl border px-4 py-3 ${tones[tone]}`}>
+    <div className={`rounded-2xl border px-4 py-3 ${tones[theme][tone]}`}>
       <p className="text-[11px] uppercase tracking-[0.2em] font-bold opacity-80">{label}</p>
       <p className="text-lg font-extrabold leading-none mt-1">{value}</p>
     </div>
@@ -318,14 +341,24 @@ export default function App() {
   const [score, setScore] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") return "light";
+    return localStorage.getItem(THEME_STORAGE_KEY) || "light";
+  });
 
   const subject = SUBJECTS[subjectIndex];
   const round = rounds[roundIndex];
+  const isDark = theme === "dark";
 
   const isCorrect = useMemo(() => {
     if (selected === null || !round) return false;
     return selected === round.lieIndex;
   }, [selected, round]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [isDark, theme]);
 
   const loadQuestionSet = async (nextSubjectIndex = subjectIndex) => {
     const nextSubject = SUBJECTS[nextSubjectIndex];
@@ -389,14 +422,25 @@ export default function App() {
     loadQuestionSet(subjectIndex);
   };
 
+  const pageBg = isDark
+    ? "bg-[radial-gradient(circle_at_top,_#0f172a,_#111827_45%,_#020617_100%)]"
+    : "bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)]";
+
+  const cardBg = isDark
+    ? "bg-slate-900/80 border-slate-700/70"
+    : "bg-white/80 border-white/70";
+
+  const textPrimary = isDark ? "text-slate-100" : "text-gray-900";
+  const textSecondary = isDark ? "text-slate-300" : "text-gray-600";
+
   if (loading && !round) {
     return (
-      <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)] flex items-center justify-center p-4">
-        <DecorativeOrbs />
-        <div className="relative w-full max-w-2xl rounded-[2rem] bg-white/80 backdrop-blur-xl shadow-2xl border border-white/70 p-6 md:p-8 text-center">
+      <div className={`relative min-h-screen overflow-hidden ${pageBg} flex items-center justify-center p-4`}>
+        <DecorativeOrbs theme={theme} />
+        <div className={`relative w-full max-w-2xl rounded-[2rem] backdrop-blur-xl shadow-2xl border p-6 md:p-8 text-center ${cardBg}`}>
           <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-lg shadow-indigo-200 animate-pulse" />
-          <p className="text-lg font-semibold text-gray-900">Loading new trivia set...</p>
-          <p className="text-gray-600 mt-2">Fetching fresh questions for you now.</p>
+          <p className={`text-lg font-semibold ${textPrimary}`}>Loading new trivia set...</p>
+          <p className={`${textSecondary} mt-2`}>Fetching fresh questions for you now.</p>
         </div>
       </div>
     );
@@ -404,11 +448,11 @@ export default function App() {
 
   if (!round) {
     return (
-      <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)] flex items-center justify-center p-4">
-        <DecorativeOrbs />
-        <div className="relative w-full max-w-2xl rounded-[2rem] bg-white/80 backdrop-blur-xl shadow-2xl border border-white/70 p-6 md:p-8 text-center">
+      <div className={`relative min-h-screen overflow-hidden ${pageBg} flex items-center justify-center p-4`}>
+        <DecorativeOrbs theme={theme} />
+        <div className={`relative w-full max-w-2xl rounded-[2rem] backdrop-blur-xl shadow-2xl border p-6 md:p-8 text-center ${cardBg}`}>
           <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-gradient-to-br from-rose-500 to-orange-500 shadow-lg shadow-rose-200" />
-          <p className="text-lg font-semibold text-gray-900">No trivia available right now.</p>
+          <p className={`text-lg font-semibold ${textPrimary}`}>No trivia available right now.</p>
           <button
             type="button"
             onClick={() => loadQuestionSet(subjectIndex)}
@@ -422,56 +466,89 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)] flex items-center justify-center p-4">
-      <DecorativeOrbs />
+    <div className={`relative min-h-screen overflow-hidden ${pageBg} flex items-center justify-center p-4`}>
+      <DecorativeOrbs theme={theme} />
 
-      <div className="relative w-full max-w-3xl rounded-[2rem] bg-white/80 backdrop-blur-xl shadow-2xl border border-white/70 p-6 md:p-8">
+      <div className={`relative w-full max-w-3xl rounded-[2rem] backdrop-blur-xl shadow-2xl border p-6 md:p-8 ${cardBg}`}>
         <div className="absolute inset-x-0 top-0 h-2 rounded-t-[2rem] bg-gradient-to-r from-indigo-500 via-fuchsia-500 to-emerald-500" />
 
-        <div className="text-center mb-6 md:mb-8">
-          <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm">
-            <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
-            Two Truths and a Lie
+        <div className="flex items-start justify-between gap-4 mb-6 md:mb-8">
+          <div className="text-center flex-1">
+            <div className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm">
+              <span className="h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+              Two Truths and a Lie
+            </div>
+
+            <h1 className={`text-4xl md:text-5xl font-black mt-4 tracking-tight ${textPrimary}`}>
+              Fresh trivia, one fake
+            </h1>
+
+            <p className={`mt-3 text-base md:text-lg max-w-2xl mx-auto ${textSecondary}`}>
+              Read the statements, trust your instincts, and spot the lie before it slips away.
+            </p>
+
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+              <div
+                className={`rounded-full bg-gradient-to-r ${subject.accent} px-4 py-2 text-white font-semibold shadow-lg ${subject.glow}`}
+              >
+                Topic: {subject.label}
+              </div>
+              <div
+                className={`rounded-full border px-4 py-2 text-sm font-medium shadow-sm ${
+                  isDark
+                    ? "border-slate-700 bg-slate-800 text-slate-300"
+                    : "border-gray-200 bg-white text-gray-600"
+                }`}
+              >
+                {rounds.length} rounds of deception
+              </div>
+            </div>
           </div>
 
-          <h1 className="text-4xl md:text-5xl font-black text-gray-900 mt-4 tracking-tight">
-            Fresh trivia, one fake
-          </h1>
-
-          <p className="text-gray-600 mt-3 text-base md:text-lg max-w-2xl mx-auto">
-            Read the statements, trust your instincts, and spot the lie before it slips away.
-          </p>
-
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-            <div
-              className={`rounded-full bg-gradient-to-r ${subject.accent} px-4 py-2 text-white font-semibold shadow-lg ${subject.glow}`}
-            >
-              Topic: {subject.label}
-            </div>
-            <div className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 shadow-sm">
-              {rounds.length} rounds of deception
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={() => setTheme(isDark ? "light" : "dark")}
+            className={`shrink-0 rounded-2xl border px-4 py-3 font-semibold shadow-sm transition-colors ${
+              isDark
+                ? "border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+            aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+          >
+            {isDark ? "☀️ Light" : "🌙 Dark"}
+          </button>
         </div>
 
         <div className="grid gap-3 md:grid-cols-3 mb-6">
-          <StatPill label="Round" value={`${roundIndex + 1}/${rounds.length}`} tone="indigo" />
-          <StatPill label="Score" value={score} tone="emerald" />
-          <StatPill label="Mood" value={showResult ? "Revealed" : "Guessing"} tone="amber" />
+          <StatPill label="Round" value={`${roundIndex + 1}/${rounds.length}`} tone="indigo" theme={theme} />
+          <StatPill label="Score" value={score} tone="emerald" theme={theme} />
+          <StatPill label="Mood" value={showResult ? "Revealed" : "Guessing"} tone="amber" theme={theme} />
         </div>
 
         {error && (
-          <div className="mb-5 rounded-3xl border border-amber-200 bg-amber-50/90 p-4 shadow-sm">
-            <p className="font-semibold text-amber-900">Using fallback trivia</p>
-            <p className="text-amber-800 text-sm mt-1">{error}</p>
+          <div
+            className={`mb-5 rounded-3xl border p-4 shadow-sm ${
+              isDark ? "border-amber-900/60 bg-amber-950/40" : "border-amber-200 bg-amber-50/90"
+            }`}
+          >
+            <p className={`font-semibold ${isDark ? "text-amber-200" : "text-amber-900"}`}>
+              Using fallback trivia
+            </p>
+            <p className={`text-sm mt-1 ${isDark ? "text-amber-300" : "text-amber-800"}`}>{error}</p>
           </div>
         )}
 
-        <div className="rounded-[1.75rem] bg-gradient-to-br from-gray-50 to-white border border-gray-200 p-5 md:p-6 mb-6 shadow-sm">
+        <div
+          className={`rounded-[1.75rem] border p-5 md:p-6 mb-6 shadow-sm ${
+            isDark
+              ? "bg-gradient-to-br from-slate-800 to-slate-900 border-slate-700"
+              : "bg-gradient-to-br from-gray-50 to-white border-gray-200"
+          }`}
+        >
           <p className="text-sm font-bold uppercase tracking-[0.2em] text-emerald-700 mb-2">
             Category: {round.category}
           </p>
-          <h2 className="text-2xl md:text-3xl font-black text-gray-900 leading-tight">
+          <h2 className={`text-2xl md:text-3xl font-black leading-tight ${textPrimary}`}>
             {round.prompt}
           </h2>
         </div>
@@ -486,15 +563,19 @@ export default function App() {
               "group w-full text-left rounded-[1.5rem] border px-4 py-4 md:px-5 md:py-5 transition-all duration-200 shadow-sm ";
 
             if (!showResult) {
-              buttonClass +=
-                "border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/70 hover:-translate-y-0.5 hover:shadow-md";
+              buttonClass += isDark
+                ? "border-slate-700 bg-slate-900 hover:border-indigo-500 hover:bg-slate-800 hover:-translate-y-0.5 hover:shadow-md"
+                : "border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/70 hover:-translate-y-0.5 hover:shadow-md";
             } else if (revealCorrect) {
-              buttonClass +=
-                "border-emerald-400 bg-emerald-50 shadow-emerald-100 ring-2 ring-emerald-200";
+              buttonClass += isDark
+                ? "border-emerald-500 bg-emerald-950/40 shadow-emerald-900/20 ring-2 ring-emerald-700"
+                : "border-emerald-400 bg-emerald-50 shadow-emerald-100 ring-2 ring-emerald-200";
             } else if (revealWrong) {
-              buttonClass += "border-rose-400 bg-rose-50 shadow-rose-100 ring-2 ring-rose-200";
+              buttonClass += isDark
+                ? "border-rose-500 bg-rose-950/40 shadow-rose-900/20 ring-2 ring-rose-700"
+                : "border-rose-400 bg-rose-50 shadow-rose-100 ring-2 ring-rose-200";
             } else {
-              buttonClass += "border-gray-200 bg-gray-100 opacity-70";
+              buttonClass += isDark ? "border-slate-800 bg-slate-950 opacity-70" : "border-gray-200 bg-gray-100 opacity-70";
             }
 
             return (
@@ -509,22 +590,24 @@ export default function App() {
                     className={`mt-0.5 h-7 w-7 rounded-full border flex items-center justify-center text-xs font-black transition-colors ${
                       showResult
                         ? "border-current"
-                        : "border-indigo-200 bg-indigo-50 text-indigo-700 group-hover:bg-indigo-100"
+                        : isDark
+                          ? "border-slate-700 bg-slate-800 text-slate-100 group-hover:bg-slate-700"
+                          : "border-indigo-200 bg-indigo-50 text-indigo-700 group-hover:bg-indigo-100"
                     }`}
                   >
                     {index + 1}
                   </div>
                   <div className="flex-1">
-                    <p className="text-gray-900 font-semibold text-base md:text-lg leading-snug">
+                    <p className={`font-semibold text-base md:text-lg leading-snug ${textPrimary}`}>
                       {statement}
                     </p>
                     {showResult && revealCorrect && (
-                      <p className="text-emerald-700 text-sm mt-2 font-medium">
+                      <p className={`text-sm mt-2 font-medium ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>
                         Correct! This is the lie.
                       </p>
                     )}
                     {showResult && revealWrong && (
-                      <p className="text-rose-700 text-sm mt-2 font-medium">
+                      <p className={`text-sm mt-2 font-medium ${isDark ? "text-rose-300" : "text-rose-700"}`}>
                         Nope — this one is true.
                       </p>
                     )}
@@ -536,11 +619,17 @@ export default function App() {
         </div>
 
         {showResult && (
-          <div className="mt-6 rounded-[1.75rem] bg-gradient-to-r from-indigo-50 via-white to-fuchsia-50 border border-indigo-200 p-5 shadow-sm">
-            <p className="font-black text-indigo-900 text-lg">
+          <div
+            className={`mt-6 rounded-[1.75rem] border p-5 shadow-sm ${
+              isDark
+                ? "bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border-slate-700"
+                : "bg-gradient-to-r from-indigo-50 via-white to-fuchsia-50 border-indigo-200"
+            }`}
+          >
+            <p className={`font-black text-lg ${isDark ? "text-indigo-200" : "text-indigo-900"}`}>
               {isCorrect ? "Nice job!" : "Good try!"}
             </p>
-            <p className="text-indigo-800 mt-1">{round.explanation}</p>
+            <p className={`mt-1 ${isDark ? "text-slate-300" : "text-indigo-800"}`}>{round.explanation}</p>
           </div>
         )}
 
@@ -555,7 +644,11 @@ export default function App() {
           <button
             type="button"
             onClick={restart}
-            className="flex-1 rounded-2xl border border-gray-300 bg-white px-5 py-3 font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors shadow-sm"
+            className={`flex-1 rounded-2xl border px-5 py-3 font-semibold transition-colors shadow-sm ${
+              isDark
+                ? "border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400"
+            }`}
           >
             New Question Set
           </button>
