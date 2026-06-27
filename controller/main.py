@@ -644,6 +644,17 @@ def load_app(req: LoadAppRequest):
         if gen_app_path.exists():
             shutil.rmtree(gen_app_path)
         shutil.copytree(app_path, gen_app_path)
+
+        # Ensure App.jsx has React import for JSX to work
+        app_jsx = gen_app_path / "src" / "App.jsx"
+        if app_jsx.exists():
+            content = app_jsx.read_text()
+            if 'import React' not in content:
+                # Add React import as first import
+                lines = content.split('\n')
+                lines.insert(0, 'import React from "react";')
+                app_jsx.write_text('\n'.join(lines))
+
         return {"status": "ok", "message": f"Loaded app '{req.name}'"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Load failed: {str(e)}")
