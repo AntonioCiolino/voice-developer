@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 
 const SUBJECTS = [
   {
+    label: "Nature",
+    category: "Nature",
+    topic: "nature",
+    prompt: "Which statement about nature is the lie?",
+  },
+  {
     label: "Science",
     category: "Science",
     topic: "science",
@@ -19,15 +25,9 @@ const SUBJECTS = [
     topic: "space",
     prompt: "Which statement about space is the lie?",
   },
-  {
-    label: "History",
-    category: "History",
-    topic: "history",
-    prompt: "Which statement about history is the lie?",
-  },
 ];
 
-const TRIVIA_API_URL = "https://opentdb.com/api.php?amount=3&type=multiple";
+const TRIVIA_API_URL = "https://opentdb.com/api.php?amount=5&type=multiple";
 
 function decodeHtmlEntities(text) {
   const textarea = document.createElement("textarea");
@@ -62,6 +62,53 @@ function buildRoundFromTrivia(triviaItem, subject) {
 
 function buildFallbackRounds(subject) {
   const templates = {
+    Nature: [
+      {
+        statements: [
+          "Trees absorb carbon dioxide from the air.",
+          "Rainforests receive a lot of rainfall each year.",
+          "All deserts are covered in snow year-round.",
+        ],
+        lieIndex: 2,
+        explanation: "Deserts are typically dry, not covered in snow year-round.",
+      },
+      {
+        statements: [
+          "Bees help pollinate many plants.",
+          "Oceans cover most of Earth's surface.",
+          "Every plant needs saltwater to grow.",
+        ],
+        lieIndex: 2,
+        explanation: "Most plants do not need saltwater to grow.",
+      },
+      {
+        statements: [
+          "Mountains can form when tectonic plates collide.",
+          "Ferns reproduce using spores.",
+          "All rivers flow uphill.",
+        ],
+        lieIndex: 2,
+        explanation: "Rivers flow downhill, not uphill.",
+      },
+      {
+        statements: [
+          "Some flowers bloom only at night.",
+          "Moss often grows in damp places.",
+          "All rocks are alive.",
+        ],
+        lieIndex: 2,
+        explanation: "Rocks are not alive.",
+      },
+      {
+        statements: [
+          "Leaves can change color in autumn.",
+          "The water cycle includes evaporation and precipitation.",
+          "All clouds are made of cotton.",
+        ],
+        lieIndex: 2,
+        explanation: "Clouds are made of tiny water droplets or ice crystals, not cotton.",
+      },
+    ],
     Science: [
       {
         statements: [
@@ -89,6 +136,24 @@ function buildFallbackRounds(subject) {
         ],
         lieIndex: 2,
         explanation: "Not all metals are magnetic.",
+      },
+      {
+        statements: [
+          "Gravity pulls objects toward Earth.",
+          "A magnet can attract some metals.",
+          "All liquids are invisible.",
+        ],
+        lieIndex: 2,
+        explanation: "Liquids are visible, even if some are clear.",
+      },
+      {
+        statements: [
+          "Electricity can power light bulbs.",
+          "The human body has bones.",
+          "All gases are heavier than rocks.",
+        ],
+        lieIndex: 2,
+        explanation: "Gases are not heavier than rocks in general.",
       },
     ],
     Animals: [
@@ -119,6 +184,24 @@ function buildFallbackRounds(subject) {
         lieIndex: 2,
         explanation: "Many fish live in saltwater, not just freshwater.",
       },
+      {
+        statements: [
+          "Elephants are the largest land animals.",
+          "Some frogs can live both in water and on land.",
+          "All insects have eight legs.",
+        ],
+        lieIndex: 2,
+        explanation: "Insects have six legs, not eight.",
+      },
+      {
+        statements: [
+          "Whales breathe air.",
+          "Honeybees live in colonies.",
+          "All mammals lay eggs.",
+        ],
+        lieIndex: 2,
+        explanation: "Most mammals give birth to live young; only a few lay eggs.",
+      },
     ],
     Space: [
       {
@@ -148,35 +231,23 @@ function buildFallbackRounds(subject) {
         lieIndex: 2,
         explanation: "Stars come in many different sizes.",
       },
-    ],
-    History: [
       {
         statements: [
-          "The Great Wall of China is visible from space with the naked eye.",
-          "Ancient Egyptians built pyramids.",
-          "The Roman Empire existed.",
+          "Saturn has rings.",
+          "The Moon affects ocean tides.",
+          "All planets are made of cheese.",
         ],
-        lieIndex: 0,
-        explanation:
-          "The Great Wall of China is not generally visible from space with the naked eye.",
+        lieIndex: 2,
+        explanation: "Planets are not made of cheese.",
       },
       {
         statements: [
-          "The printing press helped spread information.",
-          "The Renaissance was a cultural movement.",
-          "The first computers were invented in the Stone Age.",
+          "A year on Mercury is shorter than a year on Earth.",
+          "Space is mostly empty.",
+          "All comets are made of fire.",
         ],
         lieIndex: 2,
-        explanation: "Computers were invented much later than the Stone Age.",
-      },
-      {
-        statements: [
-          "The Titanic sank in 1912.",
-          "The United States declared independence in 1776.",
-          "The first airplane flew before humans learned to write.",
-        ],
-        lieIndex: 2,
-        explanation: "Humans learned to write long before the first airplane flew.",
+        explanation: "Comets are made mostly of ice, dust, and rock.",
       },
     ],
   };
@@ -323,11 +394,9 @@ export default function App() {
             Fresh trivia, one fake
           </h1>
           <p className="text-gray-600 mt-3">
-            Read the three statements and guess which one is the lie.
+            Read the five statements and guess which one is the lie.
           </p>
-          <p className="text-sm text-gray-500 mt-2">
-            Topic: {subject.label}
-          </p>
+          <p className="text-sm text-gray-500 mt-2">Topic: {subject.label}</p>
         </div>
 
         <div className="flex items-center justify-between mb-5 text-sm text-gray-500">
@@ -348,9 +417,7 @@ export default function App() {
           <p className="text-sm font-semibold text-emerald-700 mb-2">
             Category: {round.category}
           </p>
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900">
-            {round.prompt}
-          </h2>
+          <h2 className="text-xl md:text-2xl font-bold text-gray-900">{round.prompt}</h2>
         </div>
 
         <div className="space-y-3">
@@ -363,8 +430,7 @@ export default function App() {
               "w-full text-left rounded-2xl border px-4 py-4 transition-all duration-200 ";
 
             if (!showResult) {
-              buttonClass +=
-                "border-gray-200 hover:border-indigo-400 hover:bg-indigo-50";
+              buttonClass += "border-gray-200 hover:border-indigo-400 hover:bg-indigo-50";
             } else if (revealCorrect) {
               buttonClass += "border-emerald-500 bg-emerald-50";
             } else if (revealWrong) {
@@ -392,9 +458,7 @@ export default function App() {
                       </p>
                     )}
                     {showResult && revealWrong && (
-                      <p className="text-red-700 text-sm mt-2">
-                        Nope — this one is true.
-                      </p>
+                      <p className="text-red-700 text-sm mt-2">Nope — this one is true.</p>
                     )}
                   </div>
                 </div>
