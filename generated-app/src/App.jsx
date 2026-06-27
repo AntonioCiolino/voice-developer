@@ -241,4 +241,13 @@ export default function App() {
             </button>
             <button
               onClick={handleNext}
-              className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-3 px-10 rounded-2xl
+              className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-3 px-10 rounded-2xl text-lg transition-all duration-200 shadow-lg"
+            >
+              {currentIndex + 1 >= gameQuotes.length ? "See Results 🏁" : "Next →"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
