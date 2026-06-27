@@ -11,7 +11,7 @@ const CATEGORY_EMOJIS = ["🐾", "🌍", "🔬", "🎨", "🏆", "🎭", "🍕",
 
 async function fetchQuestions() {
   const res = await fetch(
-    "https://opentdb.com/api.php?amount=10&type=boolean&difficulty=medium"
+    "https://opentdb.com/api.php?amount=10&type=boolean&difficulty=medium&category=27"
   );
   const data = await res.json();
 
@@ -79,9 +79,9 @@ export default function App() {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100">
         <div className="text-center bg-white rounded-2xl shadow-lg p-10 max-w-md w-full mx-4">
-          <div className="text-6xl mb-4 animate-bounce">🎲</div>
+          <div className="text-6xl mb-4 animate-bounce">🐾</div>
           <h1 className="text-2xl font-bold text-gray-700 mb-2">Loading Questions...</h1>
-          <p className="text-gray-400">Fetching fresh trivia from the internet!</p>
+          <p className="text-gray-400">Fetching fresh animal trivia from the internet!</p>
         </div>
       </div>
     );
@@ -93,12 +93,12 @@ export default function App() {
         <div className="text-center bg-white rounded-2xl shadow-lg p-10 max-w-md w-full mx-4">
           <div className="text-6xl mb-4">🎉</div>
           <h1 className="text-3xl font-bold mb-2 text-green-600">Game Over!</h1>
-          <p className="text-gray-600 mb-6">You've gone through all the trivia questions!</p>
+          <p className="text-gray-600 mb-6">You've gone through all the animal trivia questions!</p>
           <button
             onClick={handlePlayAgain}
             className="bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-8 rounded-xl transition-colors duration-200"
           >
-            Play Again with New Questions 🎲
+            Play Again with New Questions 🐾
           </button>
         </div>
       </div>
@@ -110,7 +110,7 @@ export default function App() {
       <div className="bg-white rounded-2xl shadow-lg p-8 max-w-lg w-full mx-4">
         {/* Header */}
         <div className="text-center mb-6">
-          <h1 className="text-3xl font-bold text-gray-800">🎲 Random Trivia</h1>
+          <h1 className="text-3xl font-bold text-gray-800">🐾 Animal Trivia</h1>
           <p className="text-sm text-gray-400 mt-1">
             Question {currentIndex + 1} of {questions.length}
           </p>
