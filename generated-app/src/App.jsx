@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
 export default function App() {
   const mountRef = useRef(null);
@@ -24,6 +25,13 @@ export default function App() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     mount.appendChild(renderer.domElement);
 
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.rotateSpeed = 0.6;
+    controls.zoomSpeed = 0.8;
+    controls.panSpeed = 0.8;
+
     const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
     const material = new THREE.MeshStandardMaterial({
       color: 0x22d3ee,
@@ -46,6 +54,7 @@ export default function App() {
       cube.rotation.x += 0.01;
       cube.rotation.y += 0.015;
 
+      controls.update();
       renderer.render(scene, camera);
       animationFrameId = requestAnimationFrame(animate);
     };
@@ -68,6 +77,7 @@ export default function App() {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener("resize", handleResize);
 
+      controls.dispose();
       geometry.dispose();
       material.dispose();
       renderer.dispose();
