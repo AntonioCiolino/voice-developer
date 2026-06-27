@@ -655,6 +655,14 @@ def load_app(req: LoadAppRequest):
                     lines.insert(0, 'import React from "react";')
                     jsx_path.write_text('\n'.join(lines))
 
+        # Install npm dependencies
+        subprocess.run(
+            ["npm", "install"],
+            cwd=str(gen_app_path),
+            capture_output=True,
+            timeout=60,
+        )
+
         return {"status": "ok", "message": f"Loaded app '{req.name}'"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Load failed: {str(e)}")
