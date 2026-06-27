@@ -6,6 +6,7 @@ import Crow from "./components/Crow.jsx";
 import Ground from "./components/Ground.jsx";
 import Sky from "./components/Sky.jsx";
 import Title from "./components/Title.jsx";
+import Cube from "./components/Cube.jsx";
 import { styles } from "./styles.js";
 import { useCatLeap } from "./hooks/useCatLeap.js";
 import { useCrowExplosion } from "./hooks/useCrowExplosion.js";
@@ -67,100 +68,3 @@ export default function App() {
         touchAction: "manipulation",
       }}
     >
-      <style>{styles}</style>
-
-      {/* Mute / Unmute button */}
-      <button
-        onClick={toggleMute}
-        title={muted ? "Unmute music" : "Mute music"}
-        style={{
-          position: "absolute",
-          top: "20px",
-          right: "16px",
-          zIndex: 100,
-          background: "rgba(255,255,255,0.25)",
-          border: "2px solid rgba(255,255,255,0.6)",
-          borderRadius: "50%",
-          width: "44px",
-          height: "44px",
-          fontSize: "1.4rem",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          WebkitBackdropFilter: "blur(4px)",
-          backdropFilter: "blur(4px)",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-          transition: "background 0.2s",
-          WebkitTapHighlightColor: "transparent",
-          touchAction: "manipulation",
-        }}
-      >
-        {muted ? "🔇" : "🎵"}
-      </button>
-
-      {/* Sky elements */}
-      <Sky onSunClick={handleSunClick} />
-
-      {/* Title */}
-      <Title />
-
-      {/* Crow */}
-      <Crow ref={crowRef} visible={crowVisible} onClick={handleCrowClick} />
-
-      {/* Paw prints */}
-      {paws.map((paw) => (
-        <div
-          key={paw.id}
-          style={{
-            position: "absolute",
-            bottom: "132px",
-            left: `${paw.x}%`,
-            fontSize: "1.2rem",
-            animation: "pawPrint 1.8s ease forwards",
-            WebkitAnimation: "pawPrint 1.8s ease forwards",
-            zIndex: 5,
-            pointerEvents: "none",
-          }}
-        >
-          🐾
-        </div>
-      ))}
-
-      {/* Ball */}
-      <Ball />
-
-      {/* Cat */}
-      <Cat
-        ref={catRef}
-        catStyle={catStyle}
-        catLeaping={catLeaping}
-        onClick={handleCatClick}
-      />
-
-      {/* Dog */}
-      <Dog ref={dogRef} onClick={handleDogClick} barking={barking} />
-
-      {/* Explosion particles */}
-      {particles.map((p) => (
-        <div
-          key={p.id}
-          className="explode-particle"
-          style={{
-            left: p.x,
-            top: p.y,
-            "--tx": p.tx,
-            "--ty": p.ty,
-          }}
-        >
-          {p.emoji}
-        </div>
-      ))}
-
-      {/* Ground (renders grass, ferns, flowers) */}
-      <div style={{ position: "absolute", bottom: 0, width: "100%" }}>
-        <Ground />
-      </div>
-    </div>
-  );
-}

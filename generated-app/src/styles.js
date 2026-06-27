@@ -125,6 +125,48 @@ export const styles = `
     100% { left: 110%; }
   }
 
+  @keyframes cubeRotate {
+    0%   { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
+    100% { transform: rotateX(360deg) rotateY(360deg) rotateZ(180deg); }
+  }
+  @-webkit-keyframes cubeRotate {
+    0%   { -webkit-transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
+    100% { -webkit-transform: rotateX(360deg) rotateY(360deg) rotateZ(180deg); }
+  }
+
+  .cube {
+    width: 80px;
+    height: 80px;
+    position: relative;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+    animation: cubeRotate 6s linear infinite;
+    -webkit-animation: cubeRotate 6s linear infinite;
+  }
+
+  .cube-face {
+    position: absolute;
+    width: 80px;
+    height: 80px;
+    background: rgba(255, 255, 255, 0.15);
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.8rem;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    box-shadow: inset 0 0 12px rgba(255,255,255,0.2);
+  }
+
+  .cube-front  { transform: translateZ(40px); }
+  .cube-back   { transform: rotateY(180deg) translateZ(40px); }
+  .cube-left   { transform: rotateY(-90deg) translateZ(40px); }
+  .cube-right  { transform: rotateY(90deg)  translateZ(40px); }
+  .cube-top    { transform: rotateX(90deg)  translateZ(40px); }
+  .cube-bottom { transform: rotateX(-90deg) translateZ(40px); }
+
   .cat {
     position: absolute;
     bottom: 130px;
@@ -218,4 +260,28 @@ export const styles = `
     font-weight: bold;
     z-index: 20;
     animation: barkBounce 0.4s ease-in-out infinite;
-    -webkit-animation:
+    -webkit-animation: barkBounce 0.4s ease-in-out infinite;
+  }
+
+  .cloud1 {
+    position: absolute;
+    font-size: 3.5rem;
+    top: 40px;
+    animation: cloudDrift1 18s linear infinite;
+    -webkit-animation: cloudDrift1 18s linear infinite;
+    z-index: 1;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .cloud2 {
+    position: absolute;
+    font-size: 2.5rem;
+    top: 80px;
+    animation: cloudDrift2 26s linear infinite 6s;
+    -webkit-animation: cloudDrift2 26s linear infinite 6s;
+    z-index: 1;
+    pointer-events: none;
+    user-select: none;
+  }
+`;
