@@ -742,6 +742,13 @@ export default function App() {
 }
 """)
 
+        # Ensure npm dependencies are installed
+        subprocess.run(
+            ["npm", "install"],
+            cwd=str(REPO_ROOT / "generated-app"),
+            capture_output=True,
+        )
+
         return {
             "status": "ok",
             "message": "Fresh app created — ready to generate",
