@@ -15,7 +15,7 @@ function shuffleArray(arr) {
 
 async function fetchQuestions() {
   const res = await fetch(
-    "https://opentdb.com/api.php?amount=10&type=multiple&difficulty=medium"
+    "https://opentdb.com/api.php?amount=10&type=multiple&difficulty=medium&category=27"
   );
   const data = await res.json();
 
