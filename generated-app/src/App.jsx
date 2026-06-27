@@ -37,6 +37,8 @@ const SUBJECTS = [
 
 const TRIVIA_API_URL = "https://opentdb.com/api.php?amount=5&type=multiple";
 const THEME_STORAGE_KEY = "two-truths-theme";
+const TRIVIA_FETCH_RETRY_COUNT = 3;
+const TRIVIA_FETCH_RETRY_DELAY_MS = 800;
 
 function decodeHtmlEntities(text) {
   const textarea = document.createElement("textarea");
@@ -51,6 +53,12 @@ function shuffle(array) {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function buildRoundFromTrivia(triviaItem, subject) {
@@ -268,7 +276,7 @@ function buildFallbackRounds(subject) {
   }));
 }
 
-async function fetchQuestionSet(subject) {
+async function fetchQuestionSetOnce(subject) {
   const response = await fetch(TRIVIA_API_URL);
 
   if (!response.ok) {
@@ -282,6 +290,24 @@ async function fetchQuestionSet(subject) {
   }
 
   return data.results.map((item) => buildRoundFromTrivia(item, subject));
+}
+
+async function fetchQuestionSetWithRetry(subject, retryCount = TRIVIA_FETCH_RETRY_COUNT) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    try {
+      return await fetchQuestionSetOnce(subject);
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < retryCount) {
+        await delay(TRIVIA_FETCH_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  throw lastError || new Error("Failed to fetch trivia questions.");
 }
 
 function DecorativeOrbs({ theme }) {
@@ -366,7 +392,7 @@ export default function App() {
     setError("");
 
     try {
-      const fetchedRounds = await fetchQuestionSet(nextSubject);
+      const fetchedRounds = await fetchQuestionSetWithRetry(nextSubject);
       setRounds(fetchedRounds);
       setRoundIndex(0);
       setSelected(null);
