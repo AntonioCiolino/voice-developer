@@ -334,11 +334,9 @@ export default function App() {
 
       disposeObject3D(environment.floor);
       disposeObject3D(environment.gridHelper);
-      disposeObject3D(environment.clickPlane);
       disposeObject3D(demoObjects.torusKnot);
       disposeObject3D(demoObjects.sphere);
       disposeObject3D(demoObjects.box);
-      currentScene?.balls?.forEach((ball) => disposeObject3D(ball));
 
       renderer.dispose();
 

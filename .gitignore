@@ -8,6 +8,7 @@ controller/.env
 # Node
 generated-app/node_modules/
 generated-app/dist/
+generated-app/.vite/
 generated-app/package-lock.json
 
 # Saved app snapshots
