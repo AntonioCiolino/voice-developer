@@ -64,10 +64,8 @@ PHONE_UI = """<!doctype html>
     #log { max-height: 0; overflow: hidden; transition: max-height 0.2s; background: #18181b; border-radius: 8px; padding: 0 12px; font-size: 11px; color: #a1a1aa; font-family: monospace; line-height: 1.4; }
     #log.expanded { max-height: 200px; padding: 8px 12px; overflow-y: auto; }
     #actions { display: flex; gap: 8px; margin-top: 8px; }
-    #saveBtn, #newBtn, #loadBtn, #refreshBtn, #undoBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
+    #saveBtn, #newBtn, #loadBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
     #saveBtn:hover, #newBtn:hover, #loadBtn:hover { background: #a1a1aa; }
-    #refreshBtn, #undoBtn { flex: 0.2; font-size: 14px; }
-    #refreshBtn:hover, #undoBtn:hover { background: #9ca3af; }
     #loadModal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 999; }
     #loadModal.open { display: flex; align-items: center; justify-content: center; }
     #loadBox { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 400px; max-height: 70vh; overflow-y: auto; padding: 20px; }
@@ -103,8 +101,6 @@ PHONE_UI = """<!doctype html>
       <button id="saveBtn" onclick="openSaveModal()">Save App</button>
       <button id="loadBtn" onclick="openLoadModal()">Load App</button>
       <button id="newBtn" onclick="newApp()">New App</button>
-      <button id="refreshBtn" onclick="refreshApp()">⟳</button>
-      <button id="undoBtn" onclick="undo()">↶</button>
     </div>
   </div>
 
@@ -289,7 +285,8 @@ PHONE_UI = """<!doctype html>
         if (res.ok) {
           status.textContent = `Loaded: "${name}" ✓`;
           status.className = 'ok';
-          refreshApp();
+          // Reload iframe to see loaded app
+          document.getElementById('preview').src = document.getElementById('preview').src;
         } else {
           status.textContent = data.detail || 'Load failed';
           status.className = 'err';
@@ -300,35 +297,6 @@ PHONE_UI = """<!doctype html>
       }
     }
 
-    function refreshApp() {
-      const iframe = document.getElementById('preview');
-      iframe.src = iframe.src;
-    }
-
-    async function undo(count = 1) {
-      const status = document.getElementById('status');
-      status.textContent = `Undoing ${count} version${count > 1 ? 's' : ''}...`;
-      status.className = '';
-      try {
-        const res = await fetch('/revert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ count })
-        });
-        const data = await res.json();
-        if (res.ok) {
-          status.textContent = `✓ Reverted ${count} version${count > 1 ? 's' : ''}`;
-          status.className = 'ok';
-          refreshApp();
-        } else {
-          status.textContent = data.detail || 'Undo failed';
-          status.className = 'err';
-        }
-      } catch (e) {
-        status.textContent = 'Network error';
-        status.className = 'err';
-      }
-    }
   </script>
 </body>
 </html>"""
