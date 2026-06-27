@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { quotes } from "./quotes";
 import { clintonQuotes } from "./clintonQuotes";
 import { jesusOrBuddhaQuotes } from "./jesusOrBuddhaQuotes";
@@ -238,4 +238,37 @@ export default function App() {
         {/* Feedback */}
         {revealed && (
           <div
-            className={`rounded-2xl p
+            className={`rounded-2xl p-5 mb-6 text-center ${
+              isCorrect
+                ? "bg-green-50 border-2 border-green-300"
+                : "bg-red-50 border-2 border-red-300"
+            }`}
+          >
+            <p className={`text-2xl font-bold mb-1 ${isCorrect ? "text-green-600" : "text-red-600"}`}>
+              {isCorrect ? "✅ Correct!" : "❌ Wrong!"}
+            </p>
+            <p className="text-gray-600 text-sm">{current.explanation}</p>
+          </div>
+        )}
+
+        {/* Next Button */}
+        {revealed && (
+          <button
+            onClick={handleNext}
+            className="w-full bg-gradient-to-r from-gray-700 to-gray-900 hover:from-gray-800 hover:to-black text-white font-bold py-4 px-10 rounded-2xl text-xl transition-all duration-200 shadow-lg"
+          >
+            {currentIndex + 1 >= gameQuotes.length ? "See Results 🏁" : "Next Quote →"}
+          </button>
+        )}
+
+        {/* Back to Home */}
+        <button
+          onClick={goHome}
+          className="w-full mt-3 bg-gray-100 hover:bg-gray-200 text-gray-500 font-semibold py-2 px-10 rounded-2xl text-sm transition-all duration-200"
+        >
+          ← Back to Games
+        </button>
+      </div>
+    </div>
+  );
+}
