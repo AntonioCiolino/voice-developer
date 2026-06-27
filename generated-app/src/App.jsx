@@ -422,6 +422,10 @@ export default function App() {
     loadQuestionSet(subjectIndex);
   };
 
+  const fullRefresh = () => {
+    window.location.reload();
+  };
+
   const pageBg = isDark
     ? "bg-[radial-gradient(circle_at_top,_#0f172a,_#111827_45%,_#020617_100%)]"
     : "bg-[radial-gradient(circle_at_top,_#eef2ff,_#ffffff_45%,_#ecfeff_100%)]";
@@ -459,6 +463,17 @@ export default function App() {
             className="mt-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 px-5 py-3 font-semibold text-white shadow-lg shadow-indigo-200 hover:scale-[1.02] hover:shadow-xl transition-all"
           >
             Try Again
+          </button>
+          <button
+            type="button"
+            onClick={fullRefresh}
+            className={`mt-3 rounded-2xl border px-5 py-3 font-semibold transition-colors shadow-sm ${
+              isDark
+                ? "border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400"
+            }`}
+          >
+            Full Refresh
           </button>
         </div>
       </div>
@@ -651,6 +666,17 @@ export default function App() {
             }`}
           >
             New Question Set
+          </button>
+          <button
+            type="button"
+            onClick={fullRefresh}
+            className={`flex-1 rounded-2xl border px-5 py-3 font-semibold transition-colors shadow-sm ${
+              isDark
+                ? "border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400"
+            }`}
+          >
+            Full Refresh
           </button>
         </div>
       </div>
