@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { quotes } from "./quotes";
 import { clintonQuotes } from "./clintonQuotes";
+import { jesusOrBuddhaQuotes } from "./jesusOrBuddhaQuotes";
 
 const GAMES = {
   trumpObama: {
@@ -34,6 +35,22 @@ const GAMES = {
       },
     },
     quotes: clintonQuotes,
+  },
+  jesusOrBuddha: {
+    title: "✝️ Jesus or Buddha?",
+    gradient: "from-amber-100 via-white to-sky-100",
+    players: ["Jesus", "Buddha"],
+    playerStyles: {
+      Jesus: {
+        base: "bg-amber-100 border-amber-400 hover:bg-amber-200 text-amber-700",
+        emoji: "✝️",
+      },
+      Buddha: {
+        base: "bg-sky-100 border-sky-400 hover:bg-sky-200 text-sky-700",
+        emoji: "☸️",
+      },
+    },
+    quotes: jesusOrBuddhaQuotes,
   },
 };
 
@@ -120,6 +137,12 @@ export default function App() {
               className="bg-gradient-to-r from-purple-500 to-yellow-500 hover:from-purple-600 hover:to-yellow-600 text-white font-bold py-4 px-10 rounded-2xl text-xl transition-all duration-200 shadow-lg"
             >
               🌟 Bill or Hillary?
+            </button>
+            <button
+              onClick={() => startGame("jesusOrBuddha")}
+              className="bg-gradient-to-r from-amber-500 to-sky-500 hover:from-amber-600 hover:to-sky-600 text-white font-bold py-4 px-10 rounded-2xl text-xl transition-all duration-200 shadow-lg"
+            >
+              ✝️ Jesus or Buddha?
             </button>
           </div>
         </div>
@@ -215,39 +238,4 @@ export default function App() {
         {/* Feedback */}
         {revealed && (
           <div
-            className={`rounded-2xl p-5 mb-6 text-center border-2 ${
-              isCorrect ? "bg-green-50 border-green-300" : "bg-red-50 border-red-300"
-            }`}
-          >
-            <p
-              className={`font-extrabold text-2xl mb-2 ${
-                isCorrect ? "text-green-600" : "text-red-500"
-              }`}
-            >
-              {isCorrect ? "✅ Correct!" : `❌ It was ${current.answer}!`}
-            </p>
-            <p className="text-gray-600 text-sm">{current.explanation}</p>
-          </div>
-        )}
-
-        {/* Next Button */}
-        {revealed && (
-          <div className="flex justify-between items-center">
-            <button
-              onClick={goHome}
-              className="text-gray-400 hover:text-gray-600 font-semibold text-sm transition-all duration-200"
-            >
-              ← Games
-            </button>
-            <button
-              onClick={handleNext}
-              className="bg-gradient-to-r from-red-500 to-blue-500 hover:from-red-600 hover:to-blue-600 text-white font-bold py-3 px-10 rounded-2xl text-lg transition-all duration-200 shadow-lg"
-            >
-              {currentIndex + 1 >= gameQuotes.length ? "See Results 🏁" : "Next →"}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+            className={`rounded-2xl p
