@@ -119,6 +119,22 @@ function createDemoObjects(scene) {
   };
 }
 
+function createBall(scene, position) {
+  const ballGeometry = new THREE.SphereGeometry(0.25, 24, 24);
+  const ballMaterial = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    metalness: 0.25,
+    roughness: 0.35,
+  });
+
+  const ball = new THREE.Mesh(ballGeometry, ballMaterial);
+  ball.position.copy(position);
+  ball.position.y = Math.max(position.y, -1.25);
+  scene.add(ball);
+
+  return ball;
+}
+
 function disposeObject3D(object) {
   if (!object) return;
 
@@ -197,8 +213,38 @@ export default function App() {
       name: "Demo Scene",
       objects: demoObjects,
       environment,
+      balls: [],
     };
     assetsRef.current.currentSceneId = "demo";
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+
+    const getPointerIntersection = (event) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+
+      pointer.set(x, y);
+      raycaster.setFromCamera(pointer, camera);
+
+      const intersections = raycaster.intersectObject(environment.floor, false);
+      return intersections[0] || null;
+    };
+
+    const handlePointerDown = (event) => {
+      const intersection = getPointerIntersection(event);
+      if (!intersection) return;
+
+      const currentScene = assetsRef.current.scenes[assetsRef.current.currentSceneId];
+      if (!currentScene) return;
+
+      const ball = createBall(scene, intersection.point);
+      currentScene.balls = currentScene.balls || [];
+      currentScene.balls.push(ball);
+    };
+
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
 
     const clock = new THREE.Clock();
     let animationFrameId = 0;
@@ -237,6 +283,14 @@ export default function App() {
         }
       }
 
+      if (currentScene?.balls?.length) {
+        currentScene.balls.forEach((ball, index) => {
+          ball.position.y = Math.max(ball.position.y, -1.25) + Math.sin(elapsedTime * 3 + index) * 0.0005;
+          ball.rotation.x += 0.4 * deltaTime;
+          ball.rotation.y += 0.6 * deltaTime;
+        });
+      }
+
       controls.update();
       renderer.render(scene, camera);
     };
@@ -258,6 +312,7 @@ export default function App() {
     return () => {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener("resize", handleResize);
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
 
       controls.dispose();
 
@@ -266,6 +321,7 @@ export default function App() {
       disposeObject3D(demoObjects.torusKnot);
       disposeObject3D(demoObjects.sphere);
       disposeObject3D(demoObjects.box);
+      currentScene?.balls?.forEach((ball) => disposeObject3D(ball));
 
       renderer.dispose();
 
@@ -325,6 +381,10 @@ export default function App() {
             <span>Asset Pipeline</span>
             <span>Ready</span>
           </div>
+          <div className="mt-2 flex items-center justify-between">
+            <span>Balls</span>
+            <span>{assetsRef.current.scenes.demo?.balls?.length || 0}</span>
+          </div>
         </div>
 
         <div className="space-y-3">
@@ -369,7 +429,7 @@ export default function App() {
             </div>
             <div className="mt-2 flex items-center justify-between">
               <span>Interaction</span>
-              <span>Drag / Scroll</span>
+              <span>Drag / Scroll / Click</span>
             </div>
           </div>
         </div>
