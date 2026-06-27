@@ -694,18 +694,29 @@ def revert(count: int = 1):
 @app.post("/new")
 def new_app():
     try:
-        # Remove all files except main.jsx
+        # Remove all src files
         for f in APP_SRC.iterdir():
-            if f.name == "main.jsx":
-                continue
             if f.is_file():
                 f.unlink()
             elif f.is_dir():
                 shutil.rmtree(f)
 
+        # Create fresh main.jsx
+        main_jsx = APP_SRC / "main.jsx"
+        main_jsx.write_text("""import React, { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App.jsx";
+
+createRoot(document.getElementById("root")).render(
+  <StrictMode>
+    <App />
+  </StrictMode>
+);
+""")
+
         # Create blank App.jsx
         app_jsx = APP_SRC / "App.jsx"
-        starter = """export default function App() {
+        app_jsx.write_text("""export default function App() {
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-100">
       <div className="text-center">
@@ -715,8 +726,7 @@ def new_app():
     </div>
   );
 }
-"""
-        app_jsx.write_text(starter)
+""")
 
         return {
             "status": "ok",
