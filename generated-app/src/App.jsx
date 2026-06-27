@@ -4,6 +4,7 @@ import TopBar from "./components/TopBar";
 import ViewOne from "./components/ViewOne";
 import ViewTwo from "./components/ViewTwo";
 import ViewThree from "./components/ViewThree";
+import ViewSpecial from "./components/ViewSpecial";
 import { useClickCount } from "./hooks/useClickCount";
 
 export default function App() {
@@ -14,6 +15,7 @@ export default function App() {
     one: "Text Document",
     two: "3D Cube",
     three: "Animal Parade",
+    special: "Special Page",
   };
 
   return (
@@ -31,6 +33,7 @@ export default function App() {
             {activeView === "one" && <ViewOne />}
             {activeView === "two" && <ViewTwo />}
             {activeView === "three" && <ViewThree />}
+            {activeView === "special" && <ViewSpecial />}
           </div>
         </main>
       </div>

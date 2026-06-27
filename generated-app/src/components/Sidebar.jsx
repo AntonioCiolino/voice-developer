@@ -2,6 +2,7 @@ const NAV_ITEMS = [
   { id: "one", label: "One", icon: "📄", description: "Text Document" },
   { id: "two", label: "Two", icon: "🎲", description: "3D Cube" },
   { id: "three", label: "Three", icon: "🐾", description: "Animal Parade" },
+  { id: "special", label: "Special", icon: "🎉", description: "Secret Page" },
 ];
 
 export default function Sidebar({ activeView, setActiveView }) {
