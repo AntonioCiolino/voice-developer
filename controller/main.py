@@ -454,11 +454,11 @@ PHONE_UI = """<!doctype html>
         if (res.ok) {
           status.textContent = `Loaded: "${name}" ✓`;
           status.className = 'ok';
-          // Wait for files to settle, then hard-reload iframe with cache bust
+          // Wait for Vite to detect file changes then reload iframe
           setTimeout(() => {
             const iframe = document.getElementById('preview');
             iframe.src = `${appUrl}?t=${Date.now()}`;
-          }, 500);
+          }, 1500);
         } else {
           status.textContent = data.detail || 'Load failed';
           status.className = 'err';
@@ -696,13 +696,16 @@ def load_app(req: LoadAppRequest):
     try:
         gen_app_path = REPO_ROOT / "generated-app"
 
-        # Only replace src dir — keeps node_modules intact so Vite stays alive
+        # Replace src contents without deleting the dir — keeps Vite's watcher alive
         src_dest = gen_app_path / "src"
-        if src_dest.exists():
-            shutil.rmtree(src_dest)
+        src_dest.mkdir(parents=True, exist_ok=True)
+        for item in src_dest.iterdir():
+            item.unlink() if item.is_file() else shutil.rmtree(item)
         saved_src = app_path / "src"
         if saved_src.exists():
-            shutil.copytree(saved_src, src_dest)
+            for item in saved_src.iterdir():
+                dest = src_dest / item.name
+                shutil.copy2(item, dest) if item.is_file() else shutil.copytree(item, dest)
 
         # Update top-level config files
         for config_file in ["package.json", "vite.config.js", "index.html"]:
