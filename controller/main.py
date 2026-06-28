@@ -354,6 +354,10 @@ PHONE_UI = """<!doctype html>
           status.className = 'ok';
           document.getElementById('log').textContent = '';
           document.getElementById('log').classList.remove('expanded');
+          setTimeout(() => {
+            const iframe = document.getElementById('preview');
+            iframe.src = `${appUrl}?t=${Date.now()}`;
+          }, 500);
         } else {
           status.textContent = data.detail || 'New app failed';
           status.className = 'err';
@@ -691,28 +695,32 @@ def load_app(req: LoadAppRequest):
         raise HTTPException(status_code=404, detail=f"App '{req.name}' not found")
     try:
         gen_app_path = REPO_ROOT / "generated-app"
-        if gen_app_path.exists():
-            shutil.rmtree(gen_app_path)
-        # Copy app but skip node_modules
-        shutil.copytree(
-            app_path,
-            gen_app_path,
-            ignore=shutil.ignore_patterns("node_modules", ".vite"),
-            dirs_exist_ok=True,
-        )
 
-        # Ensure App.jsx and main.jsx have React import for JSX to work
+        # Only replace src dir — keeps node_modules intact so Vite stays alive
+        src_dest = gen_app_path / "src"
+        if src_dest.exists():
+            shutil.rmtree(src_dest)
+        saved_src = app_path / "src"
+        if saved_src.exists():
+            shutil.copytree(saved_src, src_dest)
+
+        # Update top-level config files
+        for config_file in ["package.json", "vite.config.js", "index.html"]:
+            saved_file = app_path / config_file
+            if saved_file.exists():
+                shutil.copy2(saved_file, gen_app_path / config_file)
+
+        # Ensure React import exists in JSX files
         for jsx_file in ["App.jsx", "main.jsx"]:
-            jsx_path = gen_app_path / "src" / jsx_file
+            jsx_path = src_dest / jsx_file
             if jsx_path.exists():
                 content = jsx_path.read_text()
                 if 'import React' not in content:
-                    # Add React import as first import
                     lines = content.split('\n')
                     lines.insert(0, 'import React from "react";')
                     jsx_path.write_text('\n'.join(lines))
 
-        # Install npm dependencies
+        # Install deps in case package.json changed
         subprocess.run(
             ["npm", "install"],
             cwd=str(gen_app_path),
