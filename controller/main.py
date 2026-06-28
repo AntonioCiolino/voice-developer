@@ -133,7 +133,7 @@ PHONE_UI = """<!doctype html>
     </div>
   </div>
 
-  <div id="planModal" onclick="if(event.target===this)closePlan()" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+  <div id="planModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
     <div style="background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; padding: 20px;">
       <h2 style="color: #fff; margin: 0 0 12px; font-size: 18px;">Plan</h2>
       <div id="planText" style="font-size: 12px; color: #a1a1aa; line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap;"></div>
@@ -185,6 +185,7 @@ PHONE_UI = """<!doctype html>
     let currentTasks = [];
     let currentTaskIndex = 0;
     let originalPrompt = '';
+    let isExecuting = false;
 
     async function plan() {
       const prompt = document.getElementById('prompt').value.trim();
@@ -209,8 +210,10 @@ PHONE_UI = """<!doctype html>
           document.getElementById('genStatus').innerHTML = `<strong>Plan ready.</strong> Executing ${data.task_count} tasks...`;
           document.getElementById('genLog').textContent = '';
           document.getElementById('planModal').style.display = 'flex';
+          document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
           status.textContent = 'Executing tasks...';
           status.className = '';
+          isExecuting = true;
           setTimeout(() => executeNextTask(), 300);
         } else {
           status.textContent = data.detail || 'Planning failed';
@@ -224,7 +227,9 @@ PHONE_UI = """<!doctype html>
 
     async function executeNextTask() {
       if (currentTaskIndex >= currentTasks.length) {
+        isExecuting = false;
         document.getElementById('genStatus').textContent = `✓ All ${currentTasks.length} tasks complete!`;
+        document.getElementById('closeBtn').textContent = 'Close';
         document.getElementById('status').textContent = 'Done — app updated';
         document.getElementById('status').className = 'ok';
         document.getElementById('prompt').value = '';
@@ -262,19 +267,30 @@ PHONE_UI = """<!doctype html>
           currentTaskIndex++;
           setTimeout(() => executeNextTask(), 500);
         } else {
+          isExecuting = false;
+          document.getElementById('closeBtn').textContent = 'Close';
           genStatus.innerHTML += ` <span style="color: #f87171;">[FAILED]</span>`;
           status.textContent = 'Task failed';
           status.className = 'err';
+          clearProcessing();
         }
       } catch (e) {
+        isExecuting = false;
+        document.getElementById('closeBtn').textContent = 'Close';
         genStatus.innerHTML += ` <span style="color: #f87171;">[ERROR]</span>`;
         status.textContent = 'Network error';
         status.className = 'err';
+        clearProcessing();
       }
     }
 
     function closePlan() {
+      if (isExecuting) {
+        if (!confirm('Tasks are still running. Close anyway? Progress will continue in the background.')) return;
+        isExecuting = false;
+      }
       document.getElementById('planModal').style.display = 'none';
+      document.getElementById('closeBtn').textContent = 'Close';
     }
 
     function toggleLog() {
