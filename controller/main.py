@@ -6,12 +6,14 @@ import shutil
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
+import httpx
+import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 load_dotenv()
@@ -19,6 +21,38 @@ load_dotenv()
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 APP_SRC = REPO_ROOT / "generated-app" / "src"
 SAVED_APPS = REPO_ROOT / "saved-apps"
+
+# Auth config
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
+ALLOWED_EMAILS = {e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()}
+SESSION_COOKIE = "vd_session"
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+
+def get_session_email(request: Request) -> str | None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SESSION_SECRET, algorithms=["HS256"])
+        return payload.get("email")
+    except Exception:
+        return None
+
+
+def get_session_name(request: Request) -> str:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return ""
+    try:
+        payload = jwt.decode(token, SESSION_SECRET, algorithms=["HS256"])
+        return payload.get("name", payload.get("email", ""))
+    except Exception:
+        return ""
 
 # In-memory job store and queue
 jobs: dict = {}
@@ -111,6 +145,15 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    if request.url.path.startswith("/auth/"):
+        return await call_next(request)
+    if not get_session_email(request):
+        return RedirectResponse(url="/auth/login")
+    return await call_next(request)
+
+
 PHONE_UI = """<!doctype html>
 <html lang="en">
 <head>
@@ -137,6 +180,8 @@ PHONE_UI = """<!doctype html>
     #actions { display: flex; gap: 8px; margin-top: 8px; }
     #saveBtn, #newBtn, #loadBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
     #saveBtn:hover, #newBtn:hover, #loadBtn:hover { background: #a1a1aa; }
+    #userBar { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #52525b; margin-top: 4px; }
+    #logoutBtn { background: none; border: none; color: #52525b; cursor: pointer; font-size: 11px; padding: 0; flex: none; text-decoration: underline; }
     #loadModal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 999; }
     #loadModal.open { display: flex; align-items: center; justify-content: center; }
     #loadBox { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 400px; max-height: 70vh; overflow-y: auto; padding: 20px; }
@@ -196,6 +241,10 @@ PHONE_UI = """<!doctype html>
       <button id="saveBtn" onclick="openSaveModal()">Save App</button>
       <button id="loadBtn" onclick="openLoadModal()">Load App</button>
       <button id="newBtn" onclick="newApp()">New App</button>
+    </div>
+    <div id="userBar">
+      <span>{{USER_NAME}}</span>
+      <button id="logoutBtn" onclick="window.location='/auth/logout'">logout</button>
     </div>
   </div>
 
@@ -587,8 +636,70 @@ PHONE_UI = """<!doctype html>
 
 
 @app.get("/", response_class=HTMLResponse)
-def phone_ui():
-    return PHONE_UI
+def phone_ui(request: Request):
+    name = get_session_name(request)
+    return PHONE_UI.replace("{{USER_NAME}}", name)
+
+
+@app.get("/auth/login")
+def auth_login(request: Request):
+    redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+    params = "&".join([
+        f"client_id={GOOGLE_CLIENT_ID}",
+        f"redirect_uri={redirect_uri}",
+        "response_type=code",
+        "scope=openid%20email%20profile",
+        "access_type=offline",
+        "prompt=select_account",
+    ])
+    return RedirectResponse(url=f"{GOOGLE_AUTH_URL}?{params}")
+
+
+@app.get("/auth/callback")
+async def auth_callback(code: str, request: Request):
+    redirect_uri = str(request.base_url).rstrip("/") + "/auth/callback"
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        tokens = token_res.json()
+        if "access_token" not in tokens:
+            raise HTTPException(status_code=400, detail="OAuth token exchange failed")
+
+        userinfo_res = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        userinfo = userinfo_res.json()
+
+    email = userinfo.get("email", "")
+    if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
+        raise HTTPException(status_code=403, detail=f"Access denied for {email}")
+
+    session_token = jwt.encode({
+        "email": email,
+        "name": userinfo.get("name", email),
+        "exp": datetime.now(timezone.utc) + timedelta(days=30),
+    }, SESSION_SECRET, algorithm="HS256")
+
+    response = RedirectResponse(url="/")
+    response.set_cookie(
+        SESSION_COOKIE, session_token,
+        httponly=True, samesite="lax",
+        max_age=30 * 24 * 3600,
+    )
+    return response
+
+
+@app.get("/auth/logout")
+def auth_logout():
+    response = RedirectResponse(url="/auth/login")
+    response.delete_cookie(SESSION_COOKIE)
+    return response
 
 
 @app.get("/status")
