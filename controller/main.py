@@ -106,6 +106,25 @@ PHONE_UI = """<!doctype html>
     #processing.active { display: block; }
     #processing::before { content: '⏳ '; }
     iframe { flex: 1; border: none; background: #fff; }
+    .taskItem { border: 1px solid #3f3f46; border-radius: 8px; overflow: hidden; background: #18181b; }
+    .taskHeader { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; user-select: none; }
+    .taskHeader:hover { background: #27272a; }
+    .taskIcon { font-size: 13px; flex-shrink: 0; width: 18px; text-align: center; color: #52525b; }
+    .taskLabel { flex: 1; font-size: 12px; color: #71717a; }
+    .taskMeta { font-size: 11px; color: #52525b; flex-shrink: 0; }
+    .taskChevron { font-size: 10px; color: #52525b; flex-shrink: 0; }
+    .taskLog { font-size: 11px; font-family: monospace; color: #a1a1aa; padding: 8px 12px; background: #09090b; border-top: 1px solid #27272a; line-height: 1.4; max-height: 180px; overflow-y: auto; white-space: pre-wrap; display: none; }
+    .task-running .taskHeader { background: rgba(251,191,36,0.05); }
+    .task-running .taskIcon { color: #fbbf24; }
+    .task-running .taskLabel { color: #fbbf24; }
+    .task-done .taskIcon { color: #4ade80; }
+    .task-done .taskLabel { color: #d4d4d8; }
+    .task-failed .taskIcon { color: #f87171; }
+    .task-failed .taskLabel { color: #f87171; }
+    #planHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    #fullPlanToggle { background: none; border: 1px solid #3f3f46; color: #71717a; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 11px; flex: none; }
+    #fullPlanText { display: none; font-size: 11px; color: #71717a; white-space: pre-wrap; margin-bottom: 12px; background: #09090b; border-radius: 6px; padding: 10px; line-height: 1.6; border: 1px solid #27272a; max-height: 200px; overflow-y: auto; }
+    #taskList { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -134,12 +153,14 @@ PHONE_UI = """<!doctype html>
   </div>
 
   <div id="planModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
-    <div style="background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; padding: 20px;">
-      <h2 style="color: #fff; margin: 0 0 12px; font-size: 18px;">Plan</h2>
-      <div id="planText" style="font-size: 12px; color: #a1a1aa; line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap;"></div>
-      <div id="genStatus" style="font-size: 13px; color: #71717a; margin-top: 12px; font-weight: 500;"></div>
-      <div id="genLog" style="font-size: 11px; color: #a1a1aa; font-family: monospace; margin-top: 8px; max-height: 300px; overflow-y: auto; line-height: 1.4; background: #27272a; border-radius: 4px; padding: 8px; border: 1px solid #3f3f46;"></div>
-      <button id="closeBtn" onclick="closePlan()" style="margin-top: 12px; background: #3f3f46; color: #fff; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-size: 12px; width: 100%;">Close</button>
+    <div style="background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; padding: 20px;">
+      <div id="planHeader">
+        <h2 style="color: #fff; font-size: 16px; margin: 0;">Plan</h2>
+        <button id="fullPlanToggle" onclick="toggleFullPlan()">Show full plan</button>
+      </div>
+      <div id="fullPlanText"></div>
+      <div id="taskList"></div>
+      <button id="closeBtn" onclick="closePlan()" style="background: #3f3f46; color: #fff; border: none; border-radius: 6px; padding: 9px 12px; cursor: pointer; font-size: 13px; width: 100%;">Close</button>
     </div>
   </div>
 
@@ -206,9 +227,8 @@ PHONE_UI = """<!doctype html>
         if (res.ok) {
           currentTasks = data.tasks || [];
           currentTaskIndex = 0;
-          document.getElementById('planText').textContent = data.plan;
-          document.getElementById('genStatus').innerHTML = `<strong>Plan ready.</strong> Executing ${data.task_count} tasks...`;
-          document.getElementById('genLog').textContent = '';
+          document.getElementById('fullPlanText').textContent = data.plan;
+          renderTaskList(currentTasks);
           document.getElementById('planModal').style.display = 'flex';
           document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
           status.textContent = 'Executing tasks...';
@@ -225,10 +245,44 @@ PHONE_UI = """<!doctype html>
       }
     }
 
+    function renderTaskList(tasks) {
+      document.getElementById('taskList').innerHTML = tasks.map((task, i) => `
+        <div class="taskItem task-pending" id="task-${i}">
+          <div class="taskHeader" onclick="toggleTaskLog(${i})">
+            <span class="taskIcon" id="taskIcon-${i}">○</span>
+            <span class="taskLabel" id="taskLabel-${i}">${i+1}/${tasks.length} &nbsp;${task}</span>
+            <span class="taskMeta" id="taskMeta-${i}"></span>
+            <span class="taskChevron" id="taskChevron-${i}">▶</span>
+          </div>
+          <div class="taskLog" id="taskLog-${i}"></div>
+        </div>
+      `).join('');
+    }
+
+    function toggleTaskLog(i) {
+      const log = document.getElementById(`taskLog-${i}`);
+      const chevron = document.getElementById(`taskChevron-${i}`);
+      const visible = log.style.display === 'block';
+      log.style.display = visible ? 'none' : 'block';
+      chevron.textContent = visible ? '▶' : '▼';
+    }
+
+    function toggleFullPlan() {
+      const el = document.getElementById('fullPlanText');
+      const btn = document.getElementById('fullPlanToggle');
+      const visible = el.style.display === 'block';
+      el.style.display = visible ? 'none' : 'block';
+      btn.textContent = visible ? 'Show full plan' : 'Hide full plan';
+    }
+
+    function extractCost(log) {
+      const m = log.match(/Cost:\s*(\$[\d.]+)\s*message/);
+      return m ? m[1] : '';
+    }
+
     async function executeNextTask() {
       if (currentTaskIndex >= currentTasks.length) {
         isExecuting = false;
-        document.getElementById('genStatus').textContent = `✓ All ${currentTasks.length} tasks complete!`;
         document.getElementById('closeBtn').textContent = 'Close';
         document.getElementById('status').textContent = 'Done — app updated';
         document.getElementById('status').className = 'ok';
@@ -238,48 +292,50 @@ PHONE_UI = """<!doctype html>
         return;
       }
 
-      const taskNum = currentTaskIndex + 1;
-      const taskDesc = currentTasks[currentTaskIndex];
-      const status = document.getElementById('status');
-      const genStatus = document.getElementById('genStatus');
-      const genLog = document.getElementById('genLog');
+      const i = currentTaskIndex;
+      const taskNum = i + 1;
+      const taskDesc = currentTasks[i];
+      const taskEl = document.getElementById(`task-${i}`);
+      const taskIcon = document.getElementById(`taskIcon-${i}`);
+      const taskMeta = document.getElementById(`taskMeta-${i}`);
 
-      genStatus.innerHTML = `<strong>Task ${taskNum}/${currentTasks.length}:</strong> ${taskDesc}`;
-      status.textContent = `Task ${taskNum}/${currentTasks.length}...`;
-      status.className = '';
+      taskEl.className = 'taskItem task-running';
+      taskIcon.textContent = '⟳';
+      document.getElementById('status').textContent = `Task ${taskNum}/${currentTasks.length}...`;
 
       try {
         const res = await fetch('/execute-task', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            task_num: taskNum,
-            task_desc: taskDesc,
-            original_prompt: originalPrompt
-          })
+          body: JSON.stringify({ task_num: taskNum, task_desc: taskDesc, original_prompt: originalPrompt })
         });
         const data = await res.json();
         if (data.log) {
-          genLog.textContent += `\n--- Task ${taskNum} ---\n` + data.log;
-          genLog.scrollTop = genLog.scrollHeight;
+          document.getElementById(`taskLog-${i}`).textContent = data.log;
+          const cost = extractCost(data.log);
+          if (cost) taskMeta.textContent = cost;
         }
         if (res.ok) {
+          taskEl.className = 'taskItem task-done';
+          taskIcon.textContent = '✓';
           currentTaskIndex++;
           setTimeout(() => executeNextTask(), 500);
         } else {
           isExecuting = false;
+          taskEl.className = 'taskItem task-failed';
+          taskIcon.textContent = '✗';
           document.getElementById('closeBtn').textContent = 'Close';
-          genStatus.innerHTML += ` <span style="color: #f87171;">[FAILED]</span>`;
-          status.textContent = 'Task failed';
-          status.className = 'err';
+          document.getElementById('status').textContent = 'Task failed';
+          document.getElementById('status').className = 'err';
           clearProcessing();
         }
       } catch (e) {
         isExecuting = false;
+        taskEl.className = 'taskItem task-failed';
+        taskIcon.textContent = '✗';
         document.getElementById('closeBtn').textContent = 'Close';
-        genStatus.innerHTML += ` <span style="color: #f87171;">[ERROR]</span>`;
-        status.textContent = 'Network error';
-        status.className = 'err';
+        document.getElementById('status').textContent = 'Network error';
+        document.getElementById('status').className = 'err';
         clearProcessing();
       }
     }
