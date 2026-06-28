@@ -454,11 +454,6 @@ PHONE_UI = """<!doctype html>
         if (res.ok) {
           status.textContent = `Loaded: "${name}" ✓`;
           status.className = 'ok';
-          // Wait for Vite to detect file changes then reload iframe
-          setTimeout(() => {
-            const iframe = document.getElementById('preview');
-            iframe.src = `${appUrl}?t=${Date.now()}`;
-          }, 1500);
         } else {
           status.textContent = data.detail || 'Load failed';
           status.className = 'err';
