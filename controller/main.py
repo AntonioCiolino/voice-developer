@@ -912,8 +912,8 @@ def load_app(req: LoadAppRequest):
                 dest = src_dest / item.name
                 shutil.copy2(item, dest) if item.is_file() else shutil.copytree(item, dest)
 
-        # Update top-level config files
-        for config_file in ["package.json", "vite.config.js", "index.html"]:
+        # Update top-level config files (never overwrite vite.config.js — it has server settings)
+        for config_file in ["package.json", "index.html"]:
             saved_file = app_path / config_file
             if saved_file.exists():
                 shutil.copy2(saved_file, gen_app_path / config_file)
