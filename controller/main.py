@@ -1,8 +1,10 @@
+import asyncio
 import os
 import pathlib
 import re
 import shutil
 import subprocess
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -18,6 +20,10 @@ REPO_ROOT = pathlib.Path(__file__).parent.parent
 APP_SRC = REPO_ROOT / "generated-app" / "src"
 SAVED_APPS = REPO_ROOT / "saved-apps"
 
+# In-memory job store and queue
+jobs: dict = {}
+job_queue: asyncio.Queue = None
+
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -31,20 +37,68 @@ class PlanRequest(BaseModel):
     prompt: str
 
 
-class ExecuteTaskRequest(BaseModel):
-    task_num: int
-    task_desc: str
-    original_prompt: str
-
-
 class LoadAppRequest(BaseModel):
     name: str
 
 
+def extract_cost(log: str) -> str:
+    m = re.search(r'Cost:\s*(\$[\d.]+)\s*message', log)
+    return m.group(1) if m else ''
+
+
+async def job_worker():
+    while True:
+        job_id = await job_queue.get()
+        job = jobs[job_id]
+        job['status'] = 'running'
+        api_key = os.getenv("OPENAI_API_KEY")
+
+        for i, task_desc in enumerate(job['tasks']):
+            job['current_task'] = i
+            job['task_statuses'][i] = 'running'
+
+            files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
+            files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
+                      if not f.name.endswith(".min.js")]
+            task_prompt = f"Task {i+1}: {task_desc}\n\nContext: {job['prompt']}"
+
+            try:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, lambda tp=task_prompt, fl=files: subprocess.run(
+                    ["aider", "--yes-always", "--no-pretty", "--model", "gpt-5.4-mini",
+                     "--message", tp, *fl],
+                    cwd=str(REPO_ROOT),
+                    env={**os.environ, "OPENAI_API_KEY": api_key},
+                    capture_output=True, text=True, timeout=120,
+                ))
+                job['task_logs'][i] = result.stdout[-1000:]
+                job['task_costs'][i] = extract_cost(result.stdout)
+                if result.returncode == 0:
+                    job['task_statuses'][i] = 'done'
+                else:
+                    job['task_statuses'][i] = 'failed'
+                    job['status'] = 'failed'
+                    job['error'] = result.stderr[-500:]
+                    break
+            except Exception as e:
+                job['task_statuses'][i] = 'failed'
+                job['status'] = 'failed'
+                job['error'] = str(e)
+                break
+        else:
+            job['status'] = 'done'
+
+        job_queue.task_done()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global job_queue
     APP_SRC.mkdir(parents=True, exist_ok=True)
+    job_queue = asyncio.Queue()
+    worker = asyncio.create_task(job_worker())
     yield
+    worker.cancel()
 
 
 app = FastAPI(title="voice-developer controller", lifespan=lifespan)
@@ -203,16 +257,34 @@ PHONE_UI = """<!doctype html>
 
     restoreProcessingState();
 
-    let currentTasks = [];
-    let currentTaskIndex = 0;
-    let originalPrompt = '';
     let isExecuting = false;
+    let pollTimer = null;
+
+    // Reconnect to in-flight job on page load
+    (async function reconnect() {
+      const jobId = localStorage.getItem('activeJobId');
+      if (!jobId) return;
+      try {
+        const res = await fetch(`/job/${jobId}`);
+        if (!res.ok) { localStorage.removeItem('activeJobId'); return; }
+        const job = await res.json();
+        if (job.status === 'queued' || job.status === 'running') {
+          document.getElementById('fullPlanText').textContent = job.plan || '';
+          renderTaskList(job.tasks);
+          document.getElementById('planModal').style.display = 'flex';
+          document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
+          isExecuting = true;
+          startPolling(jobId);
+        } else {
+          localStorage.removeItem('activeJobId');
+        }
+      } catch(e) { localStorage.removeItem('activeJobId'); }
+    })();
 
     async function plan() {
       const prompt = document.getElementById('prompt').value.trim();
       if (!prompt) return;
-      originalPrompt = prompt;
-      setProcessing('Planning and generating tasks...');
+      setProcessing('Planning...');
       const status = document.getElementById('status');
       status.textContent = 'Planning...';
       status.className = '';
@@ -225,23 +297,24 @@ PHONE_UI = """<!doctype html>
         });
         const data = await res.json();
         if (res.ok) {
-          currentTasks = data.tasks || [];
-          currentTaskIndex = 0;
+          localStorage.setItem('activeJobId', data.job_id);
           document.getElementById('fullPlanText').textContent = data.plan;
-          renderTaskList(currentTasks);
+          renderTaskList(data.tasks || []);
           document.getElementById('planModal').style.display = 'flex';
           document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
-          status.textContent = 'Executing tasks...';
-          status.className = '';
+          status.textContent = data.queue_position > 1 ? `Queued (#${data.queue_position})` : 'Executing tasks...';
           isExecuting = true;
-          setTimeout(() => executeNextTask(), 300);
+          setProcessing('Executing tasks...');
+          startPolling(data.job_id);
         } else {
           status.textContent = data.detail || 'Planning failed';
           status.className = 'err';
+          clearProcessing();
         }
       } catch (e) {
         status.textContent = 'Network error';
         status.className = 'err';
+        clearProcessing();
       }
     }
 
@@ -257,6 +330,58 @@ PHONE_UI = """<!doctype html>
           <div class="taskLog" id="taskLog-${i}"></div>
         </div>
       `).join('');
+    }
+
+    function updateTaskList(job) {
+      const icons = { pending: '○', running: '⟳', done: '✓', failed: '✗' };
+      job.tasks.forEach((task, i) => {
+        const taskEl = document.getElementById(`task-${i}`);
+        if (!taskEl) return;
+        const s = job.task_statuses[i];
+        taskEl.className = `taskItem task-${s}`;
+        document.getElementById(`taskIcon-${i}`).textContent = icons[s] || '○';
+        if (job.task_logs[i]) document.getElementById(`taskLog-${i}`).textContent = job.task_logs[i];
+        if (job.task_costs[i]) document.getElementById(`taskMeta-${i}`).textContent = job.task_costs[i];
+      });
+      const status = document.getElementById('status');
+      if (job.status === 'queued') {
+        status.textContent = 'Queued...';
+      } else if (job.status === 'running' && job.current_task >= 0) {
+        status.textContent = `Task ${job.current_task + 1}/${job.tasks.length}...`;
+      }
+    }
+
+    function startPolling(jobId) {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`/job/${jobId}`);
+          if (!res.ok) return;
+          const job = await res.json();
+          updateTaskList(job);
+          if (job.status === 'done') {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            isExecuting = false;
+            localStorage.removeItem('activeJobId');
+            document.getElementById('closeBtn').textContent = 'Close';
+            document.getElementById('status').textContent = 'Done — app updated';
+            document.getElementById('status').className = 'ok';
+            document.getElementById('prompt').value = '';
+            clearProcessing();
+            setTimeout(() => closePlan(), 1500);
+          } else if (job.status === 'failed') {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            isExecuting = false;
+            localStorage.removeItem('activeJobId');
+            document.getElementById('closeBtn').textContent = 'Close';
+            document.getElementById('status').textContent = 'Task failed';
+            document.getElementById('status').className = 'err';
+            clearProcessing();
+          }
+        } catch(e) { /* network blip, keep polling */ }
+      }, 2000);
     }
 
     function toggleTaskLog(i) {
@@ -275,76 +400,12 @@ PHONE_UI = """<!doctype html>
       btn.textContent = visible ? 'Show full plan' : 'Hide full plan';
     }
 
-    function extractCost(log) {
-      const m = log.match(/Cost:\s*(\$[\d.]+)\s*message/);
-      return m ? m[1] : '';
-    }
-
-    async function executeNextTask() {
-      if (currentTaskIndex >= currentTasks.length) {
-        isExecuting = false;
-        document.getElementById('closeBtn').textContent = 'Close';
-        document.getElementById('status').textContent = 'Done — app updated';
-        document.getElementById('status').className = 'ok';
-        document.getElementById('prompt').value = '';
-        clearProcessing();
-        setTimeout(() => closePlan(), 1500);
-        return;
-      }
-
-      const i = currentTaskIndex;
-      const taskNum = i + 1;
-      const taskDesc = currentTasks[i];
-      const taskEl = document.getElementById(`task-${i}`);
-      const taskIcon = document.getElementById(`taskIcon-${i}`);
-      const taskMeta = document.getElementById(`taskMeta-${i}`);
-
-      taskEl.className = 'taskItem task-running';
-      taskIcon.textContent = '⟳';
-      document.getElementById('status').textContent = `Task ${taskNum}/${currentTasks.length}...`;
-
-      try {
-        const res = await fetch('/execute-task', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task_num: taskNum, task_desc: taskDesc, original_prompt: originalPrompt })
-        });
-        const data = await res.json();
-        if (data.log) {
-          document.getElementById(`taskLog-${i}`).textContent = data.log;
-          const cost = extractCost(data.log);
-          if (cost) taskMeta.textContent = cost;
-        }
-        if (res.ok) {
-          taskEl.className = 'taskItem task-done';
-          taskIcon.textContent = '✓';
-          currentTaskIndex++;
-          setTimeout(() => executeNextTask(), 500);
-        } else {
-          isExecuting = false;
-          taskEl.className = 'taskItem task-failed';
-          taskIcon.textContent = '✗';
-          document.getElementById('closeBtn').textContent = 'Close';
-          document.getElementById('status').textContent = 'Task failed';
-          document.getElementById('status').className = 'err';
-          clearProcessing();
-        }
-      } catch (e) {
-        isExecuting = false;
-        taskEl.className = 'taskItem task-failed';
-        taskIcon.textContent = '✗';
-        document.getElementById('closeBtn').textContent = 'Close';
-        document.getElementById('status').textContent = 'Network error';
-        document.getElementById('status').className = 'err';
-        clearProcessing();
-      }
-    }
-
     function closePlan() {
       if (isExecuting) {
-        if (!confirm('Tasks are still running. Close anyway? Progress will continue in the background.')) return;
-        isExecuting = false;
+        if (!confirm('Tasks are still running on the server. Close this panel? Tasks will continue in the background.')) return;
       }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      isExecuting = false;
       document.getElementById('planModal').style.display = 'none';
       document.getElementById('closeBtn').textContent = 'Close';
     }
@@ -618,8 +679,8 @@ def save_app(req: SaveRequest):
 
 
 @app.post("/plan")
-def plan(req: PlanRequest):
-    """Generate an architecture plan using OpenAI."""
+async def plan(req: PlanRequest):
+    """Generate a plan and enqueue it as a background job."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
@@ -663,62 +724,44 @@ Tasks must use format: "1) Task name", "2) Task name", etc.""",
         )
 
         plan_text = response.choices[0].message.content
-
-        # Extract tasks (numbered 1) 2) 3) format)
         tasks = []
         for line in plan_text.split("\n"):
             match = re.match(r"^\s*\d+[\.\)]\s+(.+)$", line.strip())
             if match:
                 tasks.append(match.group(1).strip())
 
+        job_id = str(uuid.uuid4())
+        jobs[job_id] = {
+            "status": "queued",
+            "prompt": req.prompt,
+            "plan": plan_text,
+            "tasks": tasks,
+            "current_task": -1,
+            "task_statuses": ["pending"] * len(tasks),
+            "task_logs": [""] * len(tasks),
+            "task_costs": [""] * len(tasks),
+            "created_at": datetime.now().isoformat(),
+            "error": None,
+        }
+        await job_queue.put(job_id)
+
         return {
             "status": "ok",
+            "job_id": job_id,
             "plan": plan_text,
             "tasks": tasks,
             "task_count": len(tasks),
+            "queue_position": job_queue.qsize(),
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")
 
 
-@app.post("/execute-task")
-def execute_task(req: ExecuteTaskRequest):
-    """Execute a single task via aider."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
-
-    files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
-    files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
-              if not f.name.endswith(".min.js")]
-
-    task_prompt = f"Task {req.task_num}: {req.task_desc}\n\nContext: {req.original_prompt}"
-
-    try:
-        result = subprocess.run(
-            [
-                "aider",
-                "--yes-always",
-                "--no-pretty",
-                "--model", "gpt-5.4-mini",
-                "--message", task_prompt,
-                *files,
-            ],
-            cwd=str(REPO_ROOT),
-            env={**os.environ, "OPENAI_API_KEY": api_key},
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Task timed out")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="aider not found")
-
-    if result.returncode != 0:
-        raise HTTPException(status_code=502, detail=result.stderr[-2000:] or "Task failed")
-
-    return {"status": "ok", "message": f"Task {req.task_num} complete", "log": result.stdout[-1000:]}
+@app.get("/job/{job_id}")
+def get_job(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return jobs[job_id]
 
 
 @app.get("/list-apps")
