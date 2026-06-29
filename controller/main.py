@@ -178,8 +178,9 @@ PHONE_UI = """<!doctype html>
     #log { max-height: 0; overflow: hidden; transition: max-height 0.2s; background: #18181b; border-radius: 8px; padding: 0 12px; font-size: 11px; color: #a1a1aa; font-family: monospace; line-height: 1.4; }
     #log.expanded { max-height: 200px; padding: 8px 12px; overflow-y: auto; }
     #actions { display: flex; gap: 8px; margin-top: 8px; }
-    #saveBtn, #newBtn, #loadBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
-    #saveBtn:hover, #newBtn:hover, #loadBtn:hover { background: #a1a1aa; }
+    #saveBtn, #newBtn, #loadBtn, #refreshBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
+    #saveBtn:hover, #newBtn:hover, #loadBtn:hover, #refreshBtn:hover { background: #a1a1aa; }
+    #refreshBtn { background: #3f3f46; }
     #userBar { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #52525b; margin-top: 4px; }
     #logoutBtn { background: none; border: none; color: #52525b; cursor: pointer; font-size: 11px; padding: 0; flex: none; text-decoration: underline; }
     #loadModal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 999; }
@@ -241,6 +242,7 @@ PHONE_UI = """<!doctype html>
       <button id="saveBtn" onclick="openSaveModal()">Save App</button>
       <button id="loadBtn" onclick="openLoadModal()">Load App</button>
       <button id="newBtn" onclick="newApp()">New App</button>
+      <button id="refreshBtn" onclick="reloadPreview()">⟳</button>
     </div>
     <div id="userBar">
       <span>{{USER_NAME}}</span>
@@ -418,6 +420,7 @@ PHONE_UI = """<!doctype html>
             document.getElementById('status').className = 'ok';
             document.getElementById('prompt').value = '';
             clearProcessing();
+            reloadPreview();
             setTimeout(() => closePlan(), 1500);
           } else if (job.status === 'failed') {
             clearInterval(pollTimer);
@@ -431,6 +434,11 @@ PHONE_UI = """<!doctype html>
           }
         } catch(e) { /* network blip, keep polling */ }
       }, 2000);
+    }
+
+    function reloadPreview() {
+      const iframe = document.getElementById('preview');
+      iframe.src = `${appUrl}?t=${Date.now()}`;
     }
 
     function toggleTaskLog(i) {
