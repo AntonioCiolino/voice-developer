@@ -57,6 +57,7 @@ def get_session_name(request: Request) -> str:
 # In-memory job store and queue
 jobs: dict = {}
 job_queue: asyncio.Queue = None
+active_job_id: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -81,8 +82,10 @@ def extract_cost(log: str) -> str:
 
 
 async def job_worker():
+    global active_job_id
     while True:
         job_id = await job_queue.get()
+        active_job_id = job_id
         job = jobs[job_id]
         job['status'] = 'running'
         api_key = os.getenv("OPENAI_API_KEY")
@@ -163,6 +166,7 @@ async def job_worker():
         else:
             job['status'] = 'done'
 
+        active_job_id = None
         job_queue.task_done()
 
 
@@ -274,6 +278,7 @@ PHONE_UI = """<!doctype html>
     <div id="row">
       <button id="planBtn" onclick="plan()">Plan</button>
       <button id="btn" onclick="generate()">Generate</button>
+      <button id="currentPlanBtn" onclick="showActivePlan()" style="background:#3f3f46;display:none;">Current Plan</button>
     </div>
     <div id="status"></div>
     <div id="processing"></div>
@@ -352,25 +357,45 @@ PHONE_UI = """<!doctype html>
     let isExecuting = false;
     let pollTimer = null;
 
-    // Reconnect to in-flight job on page load
-    (async function reconnect() {
-      const jobId = localStorage.getItem('activeJobId');
-      if (!jobId) return;
+    function setExecuting(val) {
+      isExecuting = val;
+      document.getElementById('currentPlanBtn').style.display = val ? 'block' : 'none';
+      document.getElementById('loadBtn').disabled = val;
+      document.getElementById('newBtn').disabled = val;
+      document.getElementById('loadBtn').style.opacity = val ? '0.4' : '1';
+      document.getElementById('newBtn').style.opacity = val ? '0.4' : '1';
+    }
+
+    async function showActivePlan() {
       try {
-        const res = await fetch(`/job/${jobId}`);
-        if (!res.ok) { localStorage.removeItem('activeJobId'); return; }
+        const res = await fetch('/job/active');
+        if (!res.ok) return;
         const job = await res.json();
+        if (!job) { alert('No active plan running.'); return; }
+        document.getElementById('fullPlanText').textContent = job.plan || '';
+        renderTaskList(job.tasks);
+        updateTaskList(job);
+        document.getElementById('planModal').style.display = 'flex';
         if (job.status === 'queued' || job.status === 'running') {
-          document.getElementById('fullPlanText').textContent = job.plan || '';
-          renderTaskList(job.tasks);
-          document.getElementById('planModal').style.display = 'flex';
           document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
-          isExecuting = true;
-          startPolling(jobId);
-        } else {
-          localStorage.removeItem('activeJobId');
+          startPolling(job.job_id);
         }
-      } catch(e) { localStorage.removeItem('activeJobId'); }
+      } catch(e) { alert('Could not fetch active plan.'); }
+    }
+
+    // On load: check server for any active job (works across devices)
+    (async function reconnect() {
+      try {
+        const res = await fetch('/job/active');
+        if (!res.ok) return;
+        const job = await res.json();
+        if (!job) return;
+        if (job.status === 'queued' || job.status === 'running') {
+          localStorage.setItem('activeJobId', job.job_id);
+          setExecuting(true);
+          setProcessing('Plan running on server...');
+        }
+      } catch(e) {}
     })();
 
     async function plan() {
@@ -395,7 +420,7 @@ PHONE_UI = """<!doctype html>
           document.getElementById('planModal').style.display = 'flex';
           document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
           status.textContent = data.queue_position > 1 ? `Queued (#${data.queue_position})` : 'Executing tasks...';
-          isExecuting = true;
+          setExecuting(true);
           setProcessing('Executing tasks...');
           startPolling(data.job_id);
         } else {
@@ -454,7 +479,7 @@ PHONE_UI = """<!doctype html>
           if (job.status === 'done') {
             clearInterval(pollTimer);
             pollTimer = null;
-            isExecuting = false;
+            setExecuting(false);
             localStorage.removeItem('activeJobId');
             document.getElementById('closeBtn').textContent = 'Close';
             document.getElementById('status').textContent = 'Done — app updated';
@@ -466,7 +491,7 @@ PHONE_UI = """<!doctype html>
           } else if (job.status === 'failed') {
             clearInterval(pollTimer);
             pollTimer = null;
-            isExecuting = false;
+            setExecuting(false);
             localStorage.removeItem('activeJobId');
             document.getElementById('closeBtn').textContent = 'Close';
             document.getElementById('status').textContent = 'Task failed';
@@ -503,7 +528,6 @@ PHONE_UI = """<!doctype html>
         if (!confirm('Tasks are still running on the server. Close this panel? Tasks will continue in the background.')) return;
       }
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      isExecuting = false;
       document.getElementById('planModal').style.display = 'none';
       document.getElementById('closeBtn').textContent = 'Close';
     }
@@ -944,6 +968,17 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")
+
+
+@app.get("/job/active")
+def get_active_job():
+    if active_job_id and active_job_id in jobs:
+        return {**jobs[active_job_id], "job_id": active_job_id}
+    # Also check for queued jobs
+    for jid, job in jobs.items():
+        if job['status'] == 'queued':
+            return {**job, "job_id": jid}
+    return None
 
 
 @app.get("/job/{job_id}")
