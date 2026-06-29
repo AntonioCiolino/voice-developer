@@ -134,6 +134,21 @@ async def job_worker():
                 job['task_logs'][i] = result.stdout[-1000:]
                 job['task_costs'][i] = extract_cost(result.stdout)
                 if result.returncode == 0:
+                    # Validate App.jsx wasn't corrupted
+                    app_jsx = APP_SRC / "App.jsx"
+                    if app_jsx.exists():
+                        content = app_jsx.read_text(errors='ignore')
+                        if len(content) < 100 or 'export default' not in content:
+                            # Revert to last good commit
+                            subprocess.run(
+                                ["git", "checkout", "--", "."],
+                                cwd=str(REPO_ROOT / "generated-app"),
+                                capture_output=True,
+                            )
+                            job['task_statuses'][i] = 'failed'
+                            job['status'] = 'failed'
+                            job['error'] = f"Task {i+1} corrupted App.jsx — reverted to last good state"
+                            break
                     job['task_statuses'][i] = 'done'
                 else:
                     job['task_statuses'][i] = 'failed'
