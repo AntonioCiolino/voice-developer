@@ -91,9 +91,15 @@ async def job_worker():
             job['current_task'] = i
             job['task_statuses'][i] = 'running'
 
+            gen_app = REPO_ROOT / "generated-app"
             files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
             files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
                       if not f.name.endswith(".min.js")]
+            # Include top-level config files for full project context
+            for extra in ["vite.config.js", "index.html", "package.json"]:
+                p = gen_app / extra
+                if p.exists():
+                    files.append(str(p.relative_to(REPO_ROOT)))
 
             # Build prompt with full context of what's been done so far
             completed = [
@@ -102,9 +108,13 @@ async def job_worker():
             ]
             task_prompt = (
                 f"Overall goal: {job['prompt']}\n\n"
+                + "Architecture: pure React + Vite SPA. No backend server, no express/fastapi, "
+                + "no public/ folder unless you create it. All logic goes in src/ JSX files. "
+                + "Tailwind CSS is loaded via CDN in index.html.\n\n"
                 + (f"Tasks already completed:\n" + "\n".join(completed) + "\n\n" if completed else "")
                 + f"Now implement Task {i+1}/{len(job['tasks'])}: {task_desc}\n\n"
-                + "Do not ask clarifying questions. Make your best judgment and implement it directly."
+                + "Do not ask clarifying questions. Do not request additional files. "
+                + "Make your best judgment and implement it directly in the files provided."
             )
 
             try:
@@ -825,7 +835,15 @@ async def plan(req: PlanRequest):
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a software architect. Based on complexity:
+                    "content": """You are a software architect planning tasks for a pure React + Vite SPA.
+
+ARCHITECTURE CONSTRAINTS (never violate these):
+- Pure React frontend only. No backend server (no express, fastapi, next.js, etc.)
+- All code lives in src/ as JSX/JS files
+- No public/ folder, no JSON config files, no static assets unless creating them in src/
+- Tailwind CSS via CDN in index.html — use className with Tailwind classes
+- All data must be hardcoded in JS/JSX or fetched from external public APIs
+- Tasks are executed by aider which reads the provided src/ files — keep tasks self-contained
 
 FOR SIMPLE REQUESTS (rename, small fix, minor change):
 Output only:
@@ -846,7 +864,8 @@ Output full plan:
 ## 4) Acceptance Criteria
 ...
 
-Tasks must use format: "1) Task name", "2) Task name", etc.""",
+Tasks must use format: "1) Task name", "2) Task name", etc.
+Keep tasks concrete and self-contained. Never plan tasks that require files outside src/.""",
                 },
                 {"role": "user", "content": req.prompt},
             ],
