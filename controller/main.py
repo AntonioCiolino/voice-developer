@@ -433,7 +433,7 @@ PHONE_UI = """<!doctype html>
             document.getElementById('prompt').value = '';
             clearProcessing();
             reloadPreview();
-            setTimeout(() => closePlan(), 1500);
+            setTimeout(() => closePlan(), 10000);
           } else if (job.status === 'failed') {
             clearInterval(pollTimer);
             pollTimer = null;
