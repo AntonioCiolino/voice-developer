@@ -94,16 +94,28 @@ async def job_worker():
             files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
             files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
                       if not f.name.endswith(".min.js")]
-            task_prompt = f"Task {i+1}: {task_desc}\n\nContext: {job['prompt']}"
+
+            # Build prompt with full context of what's been done so far
+            completed = [
+                f"  - Task {j+1} (done): {job['tasks'][j]}"
+                for j in range(i) if job['task_statuses'][j] == 'done'
+            ]
+            task_prompt = (
+                f"Overall goal: {job['prompt']}\n\n"
+                + (f"Tasks already completed:\n" + "\n".join(completed) + "\n\n" if completed else "")
+                + f"Now implement Task {i+1}/{len(job['tasks'])}: {task_desc}\n\n"
+                + "Do not ask clarifying questions. Make your best judgment and implement it directly."
+            )
 
             try:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda tp=task_prompt, fl=files: subprocess.run(
-                    ["aider", "--yes-always", "--no-pretty", "--model", "gpt-5.4-mini",
-                     "--message", tp, *fl],
+                    ["aider", "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
+                     "--model", "gpt-5.4-mini", "--message", tp, *fl],
                     cwd=str(REPO_ROOT),
                     env={**os.environ, "OPENAI_API_KEY": api_key},
                     capture_output=True, text=True, timeout=120,
+                    stdin=subprocess.DEVNULL,
                 ))
                 job['task_logs'][i] = result.stdout[-1000:]
                 job['task_costs'][i] = extract_cost(result.stdout)
