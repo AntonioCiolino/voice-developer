@@ -66,6 +66,7 @@ class GenerateRequest(BaseModel):
 
 class SaveRequest(BaseModel):
     name: str
+    overwrite: bool = False
 
 
 class PlanRequest(BaseModel):
@@ -319,6 +320,9 @@ PHONE_UI = """<!doctype html>
     <div id="modalContent">
       <h2>Save App</h2>
       <input id="modalInput" type="text" placeholder="App name..." onkeypress="if(event.key==='Enter')confirmSave()" />
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#a1a1aa;margin-bottom:12px;cursor:pointer;">
+        <input type="checkbox" id="overwriteCheck" style="width:auto;flex:none;" /> Overwrite if exists
+      </label>
       <div id="modalBtns">
         <button id="saveConfirm" onclick="confirmSave()">Save</button>
         <button id="cancelModal" onclick="closeSaveModal()">Cancel</button>
@@ -552,11 +556,13 @@ PHONE_UI = """<!doctype html>
     function closeSaveModal() {
       document.getElementById('modal').classList.remove('open');
       document.getElementById('modalInput').value = '';
+      document.getElementById('overwriteCheck').checked = false;
     }
 
     async function confirmSave() {
       const name = document.getElementById('modalInput').value.trim();
       if (!name) return;
+      const overwrite = document.getElementById('overwriteCheck').checked;
       closeSaveModal();
       const status = document.getElementById('status');
       status.textContent = 'Saving...';
@@ -565,7 +571,7 @@ PHONE_UI = """<!doctype html>
         const res = await fetch('/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name })
+          body: JSON.stringify({ name, overwrite })
         });
         const data = await res.json();
         if (res.ok) {
@@ -831,8 +837,8 @@ def save_app(req: SaveRequest):
     name = req.name.strip().replace(" ", "-").lower()[:50]
     save_path = SAVED_APPS / name
 
-    if save_path.exists():
-        raise HTTPException(status_code=409, detail=f"App '{name}' already exists")
+    if save_path.exists() and not req.overwrite:
+        raise HTTPException(status_code=409, detail=f"App '{name}' already exists. Save with overwrite=true to replace it.")
 
     SAVED_APPS.mkdir(parents=True, exist_ok=True)
 
@@ -842,7 +848,6 @@ def save_app(req: SaveRequest):
         # Ensure git history exists before saving
         git_dir = app_root / ".git"
         if not git_dir.exists():
-            # Initialize git and commit current state
             subprocess.run(["git", "init"], cwd=str(app_root), capture_output=True)
             subprocess.run(["git", "add", "."], cwd=str(app_root), capture_output=True)
             subprocess.run(
@@ -850,6 +855,9 @@ def save_app(req: SaveRequest):
                 cwd=str(app_root),
                 capture_output=True,
             )
+
+        if save_path.exists():
+            shutil.rmtree(save_path)
 
         # Copy entire generated-app (includes .git for history)
         shutil.copytree(app_root, save_path)
