@@ -92,9 +92,13 @@ async def job_worker():
             job['task_statuses'][i] = 'running'
 
             gen_app = REPO_ROOT / "generated-app"
-            files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
-            files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
-                      if not f.name.endswith(".min.js")]
+            # Pass all non-binary src files so aider sees the full picture
+            binary_exts = {'.png','.jpg','.jpeg','.gif','.ico','.svg','.woff','.woff2','.ttf','.eot','.map','.lock'}
+            files = [
+                str(f.relative_to(REPO_ROOT))
+                for f in APP_SRC.rglob("*")
+                if f.is_file() and f.suffix not in binary_exts
+            ]
             # Include top-level config files for full project context
             for extra in ["vite.config.js", "index.html", "package.json"]:
                 p = gen_app / extra
@@ -819,6 +823,26 @@ def save_app(req: SaveRequest):
         raise HTTPException(status_code=500, detail=f"Save failed: {str(e)}")
 
 
+def _planner_user_msg(prompt: str) -> str:
+    """Build the planner user message including current app code for context."""
+    msg = prompt
+    # Attach current src files so planner knows what already exists
+    src_snippets = []
+    binary_exts = {'.png','.jpg','.jpeg','.gif','.ico','.svg','.woff','.woff2','.ttf','.eot','.map','.lock'}
+    for f in sorted(APP_SRC.rglob("*")):
+        if f.is_file() and f.suffix not in binary_exts:
+            try:
+                content = f.read_text(errors='ignore')
+                if len(content) > 2000:
+                    content = content[:2000] + "\n... (truncated)"
+                src_snippets.append(f"### {f.relative_to(REPO_ROOT)}\n```\n{content}\n```")
+            except Exception:
+                pass
+    if src_snippets:
+        msg += "\n\n---\nCurrent app code for context:\n\n" + "\n\n".join(src_snippets)
+    return msg
+
+
 @app.post("/plan")
 async def plan(req: PlanRequest):
     """Generate a plan and enqueue it as a background job."""
@@ -867,7 +891,7 @@ Output full plan:
 Tasks must use format: "1) Task name", "2) Task name", etc.
 Keep tasks concrete and self-contained. Never plan tasks that require files outside src/.""",
                 },
-                {"role": "user", "content": req.prompt},
+                {"role": "user", "content": _planner_user_msg(req.prompt)},
             ],
             temperature=0.7,
             max_completion_tokens=2000,
