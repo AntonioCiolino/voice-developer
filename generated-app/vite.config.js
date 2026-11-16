@@ -4,8 +4,8 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: "0.0.0.0",
+    host: process.env.VOICE_DEVELOPER_HOST || "127.0.0.1",
     port: 5773,
-    allowedHosts: true,
+    strictPort: true,
   },
 });

@@ -12,11 +12,10 @@ import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-load_dotenv()
+load_dotenv(pathlib.Path(__file__).with_name(".env"))
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 APP_SRC = REPO_ROOT / "generated-app" / "src"
@@ -25,7 +24,7 @@ SAVED_APPS = REPO_ROOT / "saved-apps"
 # Auth config
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 ALLOWED_EMAILS = {e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()}
 SESSION_COOKIE = "vd_session"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -174,6 +173,10 @@ async def job_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global job_queue
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET or not ALLOWED_EMAILS:
+        raise RuntimeError("Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and ALLOWED_EMAILS in controller/.env.")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", SESSION_SECRET):
+        raise RuntimeError("Set SESSION_SECRET to a random value generated with secrets.token_hex(32).")
     APP_SRC.mkdir(parents=True, exist_ok=True)
     job_queue = asyncio.Queue()
     worker = asyncio.create_task(job_worker())
@@ -182,14 +185,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="voice-developer controller", lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
@@ -756,7 +751,7 @@ async def auth_callback(code: str, request: Request):
         userinfo = userinfo_res.json()
 
     email = userinfo.get("email", "")
-    if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
+    if userinfo.get("email_verified") is not True or email not in ALLOWED_EMAILS:
         raise HTTPException(status_code=403, detail=f"Access denied for {email}")
 
     session_token = jwt.encode({
