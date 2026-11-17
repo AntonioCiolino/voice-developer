@@ -490,8 +490,24 @@ class RunJobTests(TempAppCase):
         cmd, kwargs = fake.calls[0]
         self.assertEqual(cmd[cmd.index("--edit-format") + 1], "diff")
         self.assertEqual(kwargs["timeout"], 120)
-        self.assertIn("Approved plan:", cmd[cmd.index("--message") + 1])
+        self.assertIn("YOUR TASK, step 1 of 1:\n  t1", cmd[cmd.index("--message") + 1])
         self.assertEqual(jobs[JOB_A]["status"], "done")
+
+    def test_task_prompt_is_scoped_to_one_task(self):
+        from controller.worker import build_task_prompt
+        self.make_job(JOB_A, ["add click handler", "add gravity", "clean up listeners"],
+                      ["done", "pending", "pending"])
+        jobs[JOB_A]["plan"] = "## Tasks\n1) add click handler\n2) add gravity\n3) clean up listeners\n## Acceptance"
+        prompt = build_task_prompt(jobs[JOB_A], 1)
+        self.assertIn("YOUR TASK, step 2 of 3:\n  add gravity", prompt)
+        self.assertIn("Already done (these changes are in the files; do not redo them):\n  - Task 1: add click handler",
+                      prompt)
+        self.assertIn("Later steps (do NOT implement any of these now; they are done separately):\n"
+                      "  - Task 3: clean up listeners", prompt)
+        self.assertIn("smallest change", prompt)
+        self.assertNotIn("## Acceptance", prompt)  # the full plan text is not included
+        last = build_task_prompt(jobs[JOB_A], 2)
+        self.assertNotIn("Later steps", last)
 
     def test_configured_timeout_and_edit_format(self):
         self.make_job(JOB_A, ["t1"])
@@ -545,9 +561,9 @@ class RunJobTests(TempAppCase):
             asyncio.run(run_job(JOB_A))
         self.assertEqual(len(fake.calls), 2)
         prompts = [c[0][c[0].index("--message") + 1] for c in fake.calls]
-        self.assertIn("Task 2/3: t2", prompts[0])
-        self.assertIn("Task 3/3: t3", prompts[1])
-        self.assertIn("Task 1 (done): t1", prompts[0])
+        self.assertIn("YOUR TASK, step 2 of 3:\n  t2", prompts[0])
+        self.assertIn("YOUR TASK, step 3 of 3:\n  t3", prompts[1])
+        self.assertIn("do not redo them):\n  - Task 1: t1", prompts[0])
         self.assertEqual(jobs[JOB_A]["task_statuses"], ["done", "done", "done"])
         self.assertEqual(jobs[JOB_A]["status"], "done")
 

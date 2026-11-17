@@ -29,7 +29,6 @@ from controller.workspace import (
 )
 
 
-PLAN_CONTEXT_LIMIT = 4000
 LOG_TAIL_LIMIT = 4000
 
 # Aider prints these (and still exits 0) when no edit reached the files.
@@ -128,23 +127,33 @@ def tail(value, limit: int = LOG_TAIL_LIMIT) -> str:
 
 
 def build_task_prompt(job: dict, i: int) -> str:
-    completed = [
-        f"  - Task {j+1} (done): {job['tasks'][j]}"
-        for j in range(i) if job['task_statuses'][j] == 'done'
-    ]
-    plan_text = (job.get('plan') or '').strip()
-    if len(plan_text) > PLAN_CONTEXT_LIMIT:
-        plan_text = plan_text[:PLAN_CONTEXT_LIMIT] + "\n... (plan truncated)"
+    """Prompt for one task. Scoped so the coder does only this task, with a minimal edit.
+
+    The full plan is deliberately not included: given every task, small models tend to
+    implement several at once. Earlier tasks are listed as already in the code and later
+    ones as explicitly out of scope.
+    """
+    tasks = job['tasks']
+    n = len(tasks)
+    completed = [f"  - Task {j+1}: {tasks[j]}" for j in range(i) if job['task_statuses'][j] == 'done']
+    later = [f"  - Task {j+1}: {tasks[j]}" for j in range(i + 1, n)]
     return (
-        f"Overall goal: {job['prompt']}\n\n"
+        f"Overall goal (context only): {job['prompt']}\n\n"
         + "Architecture: pure React + Vite SPA. No backend server, no express/fastapi, "
         + "no public/ folder unless you create it. All logic goes in src/ JSX files. "
         + "Tailwind CSS is loaded via CDN in index.html.\n\n"
-        + (f"Approved plan:\n{plan_text}\n\n" if plan_text else "")
-        + (f"Tasks already completed:\n" + "\n".join(completed) + "\n\n" if completed else "")
-        + f"Now implement Task {i+1}/{len(job['tasks'])}: {job['tasks'][i]}\n\n"
-        + "Do not ask clarifying questions. Do not request additional files. "
-        + "Make your best judgment and implement it directly in the files provided."
+        + ("Already done (these changes are in the files; do not redo them):\n"
+           + "\n".join(completed) + "\n\n" if completed else "")
+        + f"YOUR TASK, step {i+1} of {n}:\n  {tasks[i]}\n\n"
+        + ("Later steps (do NOT implement any of these now; they are done separately):\n"
+           + "\n".join(later) + "\n\n" if later else "")
+        + "Rules:\n"
+        + "- Do only YOUR TASK. Stop when it is done.\n"
+        + "- Make the smallest change that completes it. Edit only the lines it needs.\n"
+        + "- Keep all existing code, names, formatting and behavior that the task does not require changing. "
+        + "Do not refactor, reorder or reformat.\n"
+        + "- Copy each SEARCH block exactly from the current file, including indentation.\n"
+        + "- Do not ask clarifying questions or request additional files; use the files provided."
     )
 
 
