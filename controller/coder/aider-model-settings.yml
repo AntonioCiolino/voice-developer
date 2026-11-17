@@ -5,7 +5,13 @@
   use_temperature: false
 - name: gpt-6-sol
   use_temperature: false
+- name: gpt-6-astra
+  use_temperature: false
 - name: gpt-6.1-sol
   use_temperature: false
-- name: gpt-6-astra
+- name: gpt-6.1-terra
+  use_temperature: false
+- name: gpt-6.2-sol
+  use_temperature: false
+- name: gpt-6.2-astra
   use_temperature: false
