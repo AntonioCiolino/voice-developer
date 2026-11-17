@@ -322,11 +322,11 @@ PHONE_UI = """<!doctype html>
       <button id="planBtn" title="Create a step-by-step plan and run it in the background." onclick="plan()">Plan</button>
       <button id="btn" title="Send the prompt directly to the app generator." onclick="generate()">Generate</button>
       <button id="currentPlanBtn" title="View the plan currently running on the server." onclick="showActivePlan()" style="background:#3f3f46;display:none;">Current Plan</button>
-      <button id="helpBtn" title="Learn what each controller action does." onclick="openHelpModal()">ⓘ</button>
+      <button id="helpBtn" title="Learn what each controller action does." aria-label="Open controller help" aria-controls="helpModal" aria-haspopup="dialog" onclick="openHelpModal()">ⓘ</button>
     </div>
     <div id="status"></div>
     <div id="processing"></div>
-    <button id="logToggle" title="Open the latest generator output in a larger window." onclick="openLogModal()">▶ log</button>
+    <button id="logToggle" title="Open the latest generator output in a larger window." aria-label="Open generator log" aria-controls="logModal" aria-haspopup="dialog" onclick="openLogModal()">▶ log</button>
     <div id="log"></div>
     <div id="actions">
       <button id="saveBtn" title="Save the current generated app to the saved-apps list." onclick="openSaveModal()">Save App</button>
@@ -336,7 +336,7 @@ PHONE_UI = """<!doctype html>
     </div>
     <div id="userBar">
       <span>{{USER_NAME}}</span>
-      <button {{LOGOUT_VISIBILITY}} id="logoutBtn" onclick="window.location='/auth/logout'">logout</button>
+      <button title="Sign out of the controller." {{LOGOUT_VISIBILITY}} id="logoutBtn" onclick="window.location='/auth/logout'">logout</button>
     </div>
   </div>
 
@@ -347,23 +347,24 @@ PHONE_UI = """<!doctype html>
     </div>
   </div>
 
-  <div id="helpModal" onclick="if(event.target===this)closeHelpModal()">
+  <div id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle" tabindex="-1" onclick="if(event.target===this)closeHelpModal()">
     <div class="infoBox">
-      <h2>Using the controller</h2>
+      <h2 id="helpModalTitle">Using the controller</h2>
+      <p>Describe your app in the prompt, then choose <strong>Plan</strong> to review progress or <strong>Generate</strong> for a direct update. The generated app appears in the preview below.</p>
       <p><strong>Plan</strong> breaks your request into tasks, shows progress, and runs them in the background.</p>
       <p><strong>Generate</strong> sends your request directly to the generator for a quick update.</p>
       <p><strong>Save App</strong> stores the current app. <strong>Load App</strong> restores a saved app.</p>
       <p><strong>New App</strong> clears the current app. Use <strong>⟳</strong> to reload the preview.</p>
       <p><strong>log</strong> opens the latest generator output for troubleshooting.</p>
-      <button onclick="closeHelpModal()">Close</button>
+      <button id="helpCloseBtn" type="button" aria-label="Close controller help" onclick="closeHelpModal()">Close</button>
     </div>
   </div>
 
-  <div id="logModal" onclick="if(event.target===this)closeLogModal()">
+  <div id="logModal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle" tabindex="-1" onclick="if(event.target===this)closeLogModal()">
     <div class="infoBox">
-      <h2>Generator log</h2>
-      <div id="logContent"></div>
-      <button onclick="closeLogModal()">Close</button>
+      <h2 id="logModalTitle">Generator log</h2>
+      <div id="logContent" aria-live="polite"></div>
+      <button id="logCloseBtn" type="button" aria-label="Close generator log" onclick="closeLogModal()">Close</button>
     </div>
   </div>
 
@@ -599,26 +600,42 @@ PHONE_UI = """<!doctype html>
       document.getElementById('closeBtn').textContent = 'Close';
     }
 
+    let helpModalTrigger = null;
+    let logModalTrigger = null;
+
     function openHelpModal() {
+      helpModalTrigger = document.activeElement;
       document.getElementById('helpModal').classList.add('open');
+      document.getElementById('helpCloseBtn').focus();
     }
 
     function closeHelpModal() {
       document.getElementById('helpModal').classList.remove('open');
+      if (helpModalTrigger && document.contains(helpModalTrigger)) helpModalTrigger.focus();
+      helpModalTrigger = null;
     }
 
     function openLogModal() {
+      logModalTrigger = document.activeElement;
       document.getElementById('logContent').textContent = document.getElementById('log').textContent || 'No log output yet.';
       document.getElementById('logModal').classList.add('open');
+      document.getElementById('logCloseBtn').focus();
     }
 
     function closeLogModal() {
       document.getElementById('logModal').classList.remove('open');
+      if (logModalTrigger && document.contains(logModalTrigger)) logModalTrigger.focus();
+      logModalTrigger = null;
     }
 
-    function toggleLog() {
-      openLogModal();
-    }
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      if (document.getElementById('helpModal').classList.contains('open')) {
+        closeHelpModal();
+      } else if (document.getElementById('logModal').classList.contains('open')) {
+        closeLogModal();
+      }
+    });
 
     function openSaveModal() {
       document.getElementById('modal').classList.add('open');
@@ -670,7 +687,6 @@ PHONE_UI = """<!doctype html>
           status.textContent = 'New app ready';
           status.className = 'ok';
           document.getElementById('log').textContent = '';
-          document.getElementById('log').classList.remove('expanded');
           setTimeout(() => {
             const iframe = document.getElementById('preview');
             iframe.src = `${appUrl}?t=${Date.now()}`;
@@ -709,16 +725,12 @@ PHONE_UI = """<!doctype html>
           document.getElementById('prompt').value = '';
           if (data.log) {
             log.textContent = data.log;
-            log.classList.add('expanded');
-            document.getElementById('logToggle').textContent = '▼ log';
           }
         } else {
           status.textContent = data.detail || 'Error';
           status.className = 'err';
           if (data.log) {
             log.textContent = data.log;
-            log.classList.add('expanded');
-            document.getElementById('logToggle').textContent = '▼ log';
           }
         }
       } catch (e) {
