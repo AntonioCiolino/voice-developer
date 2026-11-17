@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Make the selected Ollama planner application-level local-only by validating the configured endpoint as loopback and scrubbing cloud credentials/base URLs from queued Aider subprocess environments while retaining explicit OpenAI behavior.",
+  "status": "completed",
+  "steps": [
+    "In controller/main.py, keep PLANNER_PROVIDER as the explicit openai/ollama selector and normalize OLLAMA_API_BASE without query or fragment; accept only localhost or loopback IP forms used by the local server and reject non-local URLs before constructing the planner client.",
+    "Ensure the Ollama OpenAI-compatible client receives only the local /v1 base URL and the queued Aider command uses the Ollama model, with provider_environment removing inherited OpenAI, Azure OpenAI, Anthropic, Google/Gemini credentials and base URLs and setting the validated Ollama base explicitly.",
+    "Preserve the OpenAI path and Generate's separate Anthropic path; do not alter generated-app files or broaden the feature into OS/firewall/network policy."
+  ],
+  "acceptance_criteria": [
+    "PLANNER_PROVIDER=ollama with a public or non-loopback OLLAMA_API_BASE raises PlannerConfigurationError before a client or subprocess is created.",
+    "Loopback Ollama values produce a normalized local /v1 planner endpoint and ollama_chat model without requiring an OpenAI key.",
+    "The Ollama Aider environment contains the validated local Ollama base and none of the configured cloud credentials or cloud base URLs, while OpenAI mode still uses its selected key."
+  ],
+  "verification": [
+    "controller/venv/bin/python -m unittest controller.test_planner_provider",
+    "controller/venv/bin/python -m py_compile controller/main.py controller/test_planner_provider.py",
+    "git diff --check -- controller/main.py controller/test_planner_provider.py"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented and verified loopback-only Ollama endpoint normalization/rejection, URL-credential rejection, Ollama-compatible /v1 client configuration, expanded cloud credential/base URL scrubbing for queued Aider subprocesses, and explicit OpenAI separation. Verification from /Users/antoniociolino/voice-developer: controller/venv/bin/python -m unittest controller.test_planner_provider (12 tests, OK); controller/venv/bin/python -m py_compile controller/main.py controller/test_planner_provider.py (OK); git diff --check -- controller/main.py controller/test_planner_provider.py (no errors). Live non-destructive smoke used PLANNER_PROVIDER=ollama, OLLAMA_MODEL=qwen2.5:7b, OLLAMA_API_BASE=http://127.0.0.1:11434, and empty OPENAI_API_KEY/OPENAI_API_BASE; it reported provider Ollama / local-only, endpoint http://127.0.0.1:11434/v1, and response local planner smoke ok. lsof during the request showed the planner process connected to 127.0.0.1:11434; it also showed an established Ollama-process connection from 192.168.5.33 to 34.36.133.15:443, so the smoke observation does not prove OS-level no-network behavior and may include unrelated Ollama/background activity. Application-level enforcement is limited to this planner client and Aider subprocess environment; it cannot prove that other OS processes made no network connections. No generated-app files were edited and no cloud model was requested."
+}

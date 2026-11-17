@@ -119,7 +119,12 @@ _CLOUD_PROVIDER_ENV_VARS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
     "GOOGLE_API_KEY",
+    "GOOGLE_BASE_URL",
+    "GOOGLE_API_BASE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
     "GEMINI_API_KEY",
+    "GEMINI_BASE_URL",
+    "GEMINI_API_BASE",
 )
 
 
@@ -132,9 +137,14 @@ def _normalize_ollama_api_base(value: str) -> str:
         raise PlannerConfigurationError(
             "OLLAMA_API_BASE must be an HTTP(S) URL without a query or fragment"
         )
+    if parsed.username is not None or parsed.password is not None:
+        raise PlannerConfigurationError("OLLAMA_API_BASE must not include URL credentials")
     try:
         host = parsed.hostname
-        is_loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        parsed.port
+        is_loopback = host == "localhost" or (
+            host is not None and ipaddress.ip_address(host).is_loopback
+        )
     except ValueError:
         is_loopback = False
     if not is_loopback:

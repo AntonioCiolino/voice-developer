@@ -6,6 +6,7 @@ from controller.main import (
     PlannerConfigurationError,
     build_aider_command,
     create_planner_client,
+    planner_provider_info,
     provider_environment,
     resolve_planner_provider,
 )
@@ -48,28 +49,62 @@ class PlannerProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(PlannerConfigurationError, "localhost"):
             resolve_planner_provider(environment)
 
+    def test_ollama_accepts_loopback_forms_and_normalizes_v1(self):
+        cases = {
+            "http://localhost:11434/v1/": "http://localhost:11434/v1",
+            "http://127.0.0.1:11434/": "http://127.0.0.1:11434/v1",
+            "http://[::1]:11434/v1": "http://[::1]:11434/v1",
+        }
+        for api_base, expected_endpoint in cases.items():
+            with self.subTest(api_base=api_base):
+                provider = resolve_planner_provider({
+                    "PLANNER_PROVIDER": "ollama",
+                    "OLLAMA_MODEL": "qwen2.5:7b",
+                    "OLLAMA_API_BASE": api_base,
+                })
+                self.assertEqual(provider.planner_base_url, expected_endpoint)
+
+    def test_ollama_rejects_url_credentials(self):
+        environment = {
+            "PLANNER_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "qwen2.5:7b",
+            "OLLAMA_API_BASE": "http://secret@127.0.0.1:11434",
+        }
+        with self.assertRaisesRegex(PlannerConfigurationError, "credentials"):
+            resolve_planner_provider(environment)
+
     def test_ollama_provider_reporting_is_safe(self):
         provider = resolve_planner_provider({
             "PLANNER_PROVIDER": "ollama",
             "OLLAMA_MODEL": "qwen2.5:7b",
-            "OLLAMA_API_BASE": "http://[::1]:11434",
-        })
-        from controller.main import planner_provider_info
-        self.assertEqual(planner_provider_info(provider)["label"], "Ollama / local-only")
-        self.assertNotIn("key", str(planner_provider_info(provider)).lower())
-
-        environment = {
-            "PLANNER_PROVIDER": "ollama",
-            "OLLAMA_MODEL": "qwen2.5:7b",
             "OLLAMA_API_BASE": "http://127.0.0.1:11434/",
-        }
-        provider = resolve_planner_provider(environment)
+        })
+        self.assertEqual(planner_provider_info(provider), {
+            "name": "ollama",
+            "label": "Ollama / local-only",
+            "model": "qwen2.5:7b",
+            "endpoint": "http://127.0.0.1:11434/v1",
+        })
+        self.assertNotIn("secret", str(planner_provider_info(provider)).lower())
 
-        self.assertEqual(provider.planner_base_url, "http://127.0.0.1:11434/v1")
-        self.assertEqual(provider.aider_model, "ollama_chat/qwen2.5:7b")
         command = build_aider_command(provider, "plan this", ["generated-app/src/App.jsx"])
         self.assertEqual(command[command.index("--model") + 1], "ollama_chat/qwen2.5:7b")
         self.assertEqual(command[command.index("--message") + 1], "plan this")
+
+    def test_openai_provider_reporting_is_separate_and_safe(self):
+        provider = resolve_planner_provider({
+            "PLANNER_PROVIDER": "openai",
+            "OPENAI_API_KEY": "test-secret",
+            "OPENAI_MODEL": "gpt-test",
+        })
+
+        self.assertEqual(planner_provider_info(provider), {
+            "name": "openai",
+            "label": "OpenAI",
+            "model": "gpt-test",
+            "endpoint": "OpenAI-managed endpoint",
+        })
+        self.assertNotIn("test-secret", str(planner_provider_info(provider)))
 
     def test_ollama_client_uses_compatible_local_endpoint(self):
         environment = {
@@ -96,14 +131,33 @@ class PlannerProviderTests(unittest.TestCase):
             "OPENAI_API_BASE": "https://cloud.example/v1",
             "ANTHROPIC_API_KEY": "test-anthropic-key",
             "ANTHROPIC_BASE_URL": "https://cloud.example/anthropic",
+            "AZURE_OPENAI_API_KEY": "test-azure-key",
+            "AZURE_OPENAI_ENDPOINT": "https://cloud.example/azure",
+            "GOOGLE_API_KEY": "test-google-key",
+            "GOOGLE_BASE_URL": "https://cloud.example/google",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/google-credentials.json",
+            "GEMINI_API_KEY": "test-gemini-key",
+            "GEMINI_API_BASE": "https://cloud.example/gemini",
             "PATH": "/usr/bin",
         })
 
-        self.assertNotIn("OPENAI_API_KEY", environment)
-        self.assertNotIn("OPENAI_BASE_URL", environment)
-        self.assertNotIn("OPENAI_API_BASE", environment)
-        self.assertNotIn("ANTHROPIC_API_KEY", environment)
-        self.assertNotIn("ANTHROPIC_BASE_URL", environment)
+        for variable in (
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENAI_API_BASE",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "AZURE_OPENAI_API_KEY",
+            "AZURE_OPENAI_ENDPOINT",
+            "GOOGLE_API_KEY",
+            "GOOGLE_BASE_URL",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GEMINI_API_KEY",
+            "GEMINI_API_BASE",
+        ):
+            with self.subTest(variable=variable):
+                self.assertNotIn(variable, environment)
+
         self.assertEqual(environment["OLLAMA_API_BASE"], "http://127.0.0.1:11434")
         self.assertEqual(environment["PATH"], "/usr/bin")
 
