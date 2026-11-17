@@ -113,8 +113,13 @@ _CLOUD_PROVIDER_ENV_VARS = (
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "OPENAI_API_BASE",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_BASE_URL",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
 )
 
 
@@ -126,6 +131,15 @@ def _normalize_ollama_api_base(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
         raise PlannerConfigurationError(
             "OLLAMA_API_BASE must be an HTTP(S) URL without a query or fragment"
+        )
+    try:
+        host = parsed.hostname
+        is_loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise PlannerConfigurationError(
+            "OLLAMA_API_BASE must resolve to localhost, 127.0.0.1, or ::1 in local-only mode"
         )
     return base
 
@@ -162,6 +176,23 @@ def create_planner_client(provider: PlannerProvider):
     if provider.name == "ollama":
         return OpenAI(api_key="ollama", base_url=provider.planner_base_url)
     return OpenAI(api_key=provider.api_key)
+
+
+def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
+    """Return safe provider evidence for UI and API responses."""
+    if provider.name == "ollama":
+        return {
+            "name": "ollama",
+            "label": "Ollama / local-only",
+            "model": provider.model,
+            "endpoint": provider.planner_base_url,
+        }
+    return {
+        "name": "openai",
+        "label": "OpenAI",
+        "model": provider.model,
+        "endpoint": "OpenAI-managed endpoint",
+    }
 
 
 def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | None = None) -> dict[str, str]:
@@ -362,6 +393,7 @@ PHONE_UI = """<!doctype html>
     #status { font-size: 12px; color: #71717a; min-height: 16px; text-align: center; }
     #status.ok { color: #4ade80; }
     #status.err { color: #f87171; }
+    #providerStatus { font-size: 11px; color: #a1a1aa; text-align: center; }
     #logToggle { background: none; border: none; color: #71717a; cursor: pointer; font-size: 12px; padding: 4px 8px; text-align: left; }
     #log { display: none; }
     #helpBtn { flex: none; width: 32px; padding: 8px; background: #3f3f46; color: #fff; }
@@ -432,6 +464,7 @@ PHONE_UI = """<!doctype html>
       <button id="helpBtn" title="Learn what each controller action does." aria-label="Open controller help" aria-controls="helpModal" aria-haspopup="dialog" onclick="openHelpModal()">ⓘ</button>
     </div>
     <div id="status"></div>
+    <div id="providerStatus">Planner provider: loading...</div>
     <div id="processing"></div>
     <button id="logToggle" title="Open the latest generator output in a larger window." aria-label="Open generator log" aria-controls="logModal" aria-haspopup="dialog" onclick="openLogModal()">▶ log</button>
     <div id="log"></div>
@@ -528,6 +561,17 @@ PHONE_UI = """<!doctype html>
     }
 
     restoreProcessingState();
+
+    (async function loadPlannerProvider() {
+      try {
+        const res = await fetch('/planner-provider');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail);
+        document.getElementById('providerStatus').textContent = `Planner: ${data.label} — ${data.endpoint}`;
+      } catch (e) {
+        document.getElementById('providerStatus').textContent = `Planner unavailable: ${e.message}`;
+      }
+    })();
 
     let isExecuting = false;
     let pollTimer = null;
@@ -1111,6 +1155,14 @@ def _planner_user_msg(prompt: str) -> str:
     return msg
 
 
+@app.get("/planner-provider")
+def get_planner_provider():
+    try:
+        return planner_provider_info(resolve_planner_provider())
+    except PlannerConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/plan")
 async def plan(req: PlanRequest):
     """Generate a plan and enqueue it as a background job."""
@@ -1184,6 +1236,7 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
             "task_costs": [""] * len(tasks),
             "created_at": datetime.now().isoformat(),
             "error": None,
+            "provider": planner_provider_info(provider),
         }
         await job_queue.put(job_id)
 
@@ -1194,6 +1247,7 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
             "tasks": tasks,
             "task_count": len(tasks),
             "queue_position": job_queue.qsize(),
+            "provider": planner_provider_info(provider),
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")

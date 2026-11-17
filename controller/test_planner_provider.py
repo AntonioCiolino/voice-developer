@@ -39,7 +39,25 @@ class PlannerProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(PlannerConfigurationError, "OLLAMA_API_BASE"):
             resolve_planner_provider(environment)
 
-    def test_ollama_wires_normalized_endpoint_and_model(self):
+    def test_ollama_rejects_non_local_base(self):
+        environment = {
+            "PLANNER_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "qwen2.5:7b",
+            "OLLAMA_API_BASE": "https://api.example.com",
+        }
+        with self.assertRaisesRegex(PlannerConfigurationError, "localhost"):
+            resolve_planner_provider(environment)
+
+    def test_ollama_provider_reporting_is_safe(self):
+        provider = resolve_planner_provider({
+            "PLANNER_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "qwen2.5:7b",
+            "OLLAMA_API_BASE": "http://[::1]:11434",
+        })
+        from controller.main import planner_provider_info
+        self.assertEqual(planner_provider_info(provider)["label"], "Ollama / local-only")
+        self.assertNotIn("key", str(planner_provider_info(provider)).lower())
+
         environment = {
             "PLANNER_PROVIDER": "ollama",
             "OLLAMA_MODEL": "qwen2.5:7b",
