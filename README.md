@@ -72,13 +72,13 @@ VOICE_DEVELOPER_HOST=192.168.5.33 VOICE_DEVELOPER_LOCAL_AUTH_LAN=1 ./start.sh
 
 The phone can then open [http://r2m2.local:8040](http://r2m2.local:8040), and the preview is available at [http://r2m2.local:5773](http://r2m2.local:5773). The LAN opt-in is accepted only with `VOICE_DEVELOPER_HOST=192.168.5.33`; it does not allow `0.0.0.0` or another interface. Without `VOICE_DEVELOPER_LOCAL_AUTH_LAN=1`, local authentication still requires `127.0.0.1`.
 
-This mode exposes the controller and unauthenticated preview to devices on the trusted local network. Anyone on that network may use the app, so do not use this mode on an untrusted network and do not expose either port to the public internet. The preview has no sign-in of its own. This setup does not configure Google OAuth, TLS, macOS firewall rules, or router settings. The phone and Mac must be on the same network, and macOS may require an incoming-connection approval for the two ports.
+This mode exposes the controller and unauthenticated preview to devices on the trusted local network. Anyone on that network may use the app, so do not use this mode on an untrusted network and do not expose either port to the public internet. The preview has no sign-in of its own. Google OAuth is supported by the controller, but no OAuth credentials are configured or remote access has been tested with OAuth. The current phone path uses this explicit LAN local-auth opt-in instead. This setup does not configure Google OAuth, TLS, macOS firewall rules, or router settings. The phone and Mac must be on the same network, and macOS may require an incoming-connection approval for the two ports.
 
 `VOICE_DEVELOPER_HOST` is the exact environment variable used by `start.sh`, Uvicorn, and `generated-app/vite.config.js`. Set it in the shell command as shown; putting it only in `controller/.env` does not make `start.sh` use it for binding.
 
 ### Azure VM use
 
-The repository does not provision an Azure VM, install packages on it, create a service, configure TLS, or manage secrets. Before using it, you need an existing Linux VM, SSH access, an Azure CLI installation with `az login`, and permission to modify the VM’s network security group. The VM also needs Git, Bash, Python 3.10 or newer, Node.js with npm, and the model credentials and Google authentication values described above.
+The repository documents an Azure VM setup, but it does not configure or deploy an Azure instance. It does not provision a VM, install packages on it, create a service, configure TLS, or manage secrets. Before using it, you need an existing Linux VM, SSH access, an Azure CLI installation with `az login`, and permission to modify the VM’s network security group. The VM also needs Git, Bash, Python 3.10 or newer, Node.js with npm, and the model credentials and Google authentication values described above.
 
 Copy or clone the repository on the VM, run `./setup.sh`, and create `controller/.env` with the required model and authentication values. Use a strong `SESSION_SECRET`; do not put secrets in `azure-setup.sh`, the shell history, or the README.
 
