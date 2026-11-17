@@ -256,8 +256,15 @@ PHONE_UI = """<!doctype html>
     #status.ok { color: #4ade80; }
     #status.err { color: #f87171; }
     #logToggle { background: none; border: none; color: #71717a; cursor: pointer; font-size: 12px; padding: 4px 8px; text-align: left; }
-    #log { max-height: 0; overflow: hidden; transition: max-height 0.2s; background: #18181b; border-radius: 8px; padding: 0 12px; font-size: 11px; color: #a1a1aa; font-family: monospace; line-height: 1.4; }
-    #log.expanded { max-height: 200px; padding: 8px 12px; overflow-y: auto; }
+    #log { display: none; }
+    #helpBtn { flex: none; width: 32px; padding: 8px; background: #3f3f46; color: #fff; }
+    #helpModal, #logModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 1001; align-items: center; justify-content: center; }
+    #helpModal.open, #logModal.open { display: flex; }
+    .infoBox { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 480px; max-height: 85vh; overflow-y: auto; padding: 20px; color: #d4d4d8; }
+    .infoBox h2 { color: #fff; font-size: 17px; margin-bottom: 12px; }
+    .infoBox p { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+    .infoBox button { margin-top: 8px; background: #3f3f46; color: #fff; }
+    #logContent { white-space: pre-wrap; font: 11px/1.4 monospace; color: #a1a1aa; max-height: 60vh; overflow-y: auto; }
     #actions { display: flex; gap: 8px; margin-top: 8px; }
     #saveBtn, #newBtn, #loadBtn, #refreshBtn { flex: 1; background: #71717a; color: #fff; font-weight: 600; font-size: 13px; border: none; border-radius: 8px; padding: 8px; cursor: pointer; }
     #saveBtn:hover, #newBtn:hover, #loadBtn:hover, #refreshBtn:hover { background: #a1a1aa; }
@@ -312,19 +319,20 @@ PHONE_UI = """<!doctype html>
   <div id="panel">
     <textarea id="prompt" rows="3" placeholder="Describe the app you want..."></textarea>
     <div id="row">
-      <button id="planBtn" onclick="plan()">Plan</button>
-      <button id="btn" onclick="generate()">Generate</button>
-      <button id="currentPlanBtn" onclick="showActivePlan()" style="background:#3f3f46;display:none;">Current Plan</button>
+      <button id="planBtn" title="Create a step-by-step plan and run it in the background." onclick="plan()">Plan</button>
+      <button id="btn" title="Send the prompt directly to the app generator." onclick="generate()">Generate</button>
+      <button id="currentPlanBtn" title="View the plan currently running on the server." onclick="showActivePlan()" style="background:#3f3f46;display:none;">Current Plan</button>
+      <button id="helpBtn" title="Learn what each controller action does." onclick="openHelpModal()">ⓘ</button>
     </div>
     <div id="status"></div>
     <div id="processing"></div>
-    <button id="logToggle" onclick="toggleLog()">▶ log</button>
+    <button id="logToggle" title="Open the latest generator output in a larger window." onclick="openLogModal()">▶ log</button>
     <div id="log"></div>
     <div id="actions">
-      <button id="saveBtn" onclick="openSaveModal()">Save App</button>
-      <button id="loadBtn" onclick="openLoadModal()">Load App</button>
-      <button id="newBtn" onclick="newApp()">New App</button>
-      <button id="refreshBtn" onclick="reloadPreview()">⟳</button>
+      <button id="saveBtn" title="Save the current generated app to the saved-apps list." onclick="openSaveModal()">Save App</button>
+      <button id="loadBtn" title="Load a previously saved app." onclick="openLoadModal()">Load App</button>
+      <button id="newBtn" title="Reset the generated app and start fresh." onclick="newApp()">New App</button>
+      <button id="refreshBtn" title="Reload the generated app preview." onclick="reloadPreview()">⟳</button>
     </div>
     <div id="userBar">
       <span>{{USER_NAME}}</span>
@@ -336,6 +344,26 @@ PHONE_UI = """<!doctype html>
     <div id="loadBox">
       <h2>Load App</h2>
       <div id="appsList"></div>
+    </div>
+  </div>
+
+  <div id="helpModal" onclick="if(event.target===this)closeHelpModal()">
+    <div class="infoBox">
+      <h2>Using the controller</h2>
+      <p><strong>Plan</strong> breaks your request into tasks, shows progress, and runs them in the background.</p>
+      <p><strong>Generate</strong> sends your request directly to the generator for a quick update.</p>
+      <p><strong>Save App</strong> stores the current app. <strong>Load App</strong> restores a saved app.</p>
+      <p><strong>New App</strong> clears the current app. Use <strong>⟳</strong> to reload the preview.</p>
+      <p><strong>log</strong> opens the latest generator output for troubleshooting.</p>
+      <button onclick="closeHelpModal()">Close</button>
+    </div>
+  </div>
+
+  <div id="logModal" onclick="if(event.target===this)closeLogModal()">
+    <div class="infoBox">
+      <h2>Generator log</h2>
+      <div id="logContent"></div>
+      <button onclick="closeLogModal()">Close</button>
     </div>
   </div>
 
@@ -571,16 +599,25 @@ PHONE_UI = """<!doctype html>
       document.getElementById('closeBtn').textContent = 'Close';
     }
 
+    function openHelpModal() {
+      document.getElementById('helpModal').classList.add('open');
+    }
+
+    function closeHelpModal() {
+      document.getElementById('helpModal').classList.remove('open');
+    }
+
+    function openLogModal() {
+      document.getElementById('logContent').textContent = document.getElementById('log').textContent || 'No log output yet.';
+      document.getElementById('logModal').classList.add('open');
+    }
+
+    function closeLogModal() {
+      document.getElementById('logModal').classList.remove('open');
+    }
+
     function toggleLog() {
-      const log = document.getElementById('log');
-      const toggle = document.getElementById('logToggle');
-      if (log.classList.contains('expanded')) {
-        log.classList.remove('expanded');
-        toggle.textContent = '▶ log';
-      } else {
-        log.classList.add('expanded');
-        toggle.textContent = '▼ log';
-      }
+      openLogModal();
     }
 
     function openSaveModal() {
