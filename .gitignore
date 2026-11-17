@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 controller/venv/
 controller/.env
+controller/.env.backups/
 
 # Node
 generated-app/node_modules/
@@ -16,6 +17,7 @@ saved-apps/
 
 # Worker logs
 worker/tasks.log
+.voice-developer.pids
 
 # OS
 .DS_Store
