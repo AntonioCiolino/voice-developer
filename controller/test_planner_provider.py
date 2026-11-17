@@ -16,7 +16,12 @@ from controller.main import (
     plan as create_plan,
     planner_provider_info,
     provider_environment,
+    resolve_coder_provider,
     resolve_planner_provider,
+    resolve_roles,
+    role_provider_info,
+    roles_info,
+    PHONE_UI,
 )
 
 
@@ -185,12 +190,14 @@ class PlannerProviderTests(unittest.TestCase):
             "OLLAMA_MODEL": "qwen2.5:7b",
             "OLLAMA_API_BASE": "http://127.0.0.1:11434",
         }, clear=True):
-            self.assertEqual(get_planner_provider(), {
+            result = get_planner_provider()
+            self.assertEqual({k: v for k, v in result.items() if k != "roles"}, {
                 "name": "ollama",
                 "label": "Ollama / local-only",
                 "model": "qwen2.5:7b",
                 "endpoint": "http://127.0.0.1:11434/v1",
             })
+            self.assertTrue(result["roles"]["local_only"])
 
     def test_provider_route_error_does_not_echo_rejected_endpoint(self):
         with patch.dict(os.environ, {
@@ -251,6 +258,117 @@ class PlannerProviderTests(unittest.TestCase):
             for job_id in set(jobs) - existing_jobs:
                 jobs.pop(job_id, None)
 
+
+BASE = "http://127.0.0.1:11434"
+SECRETS = {
+    "OPENAI_API_KEY": "test-secret",
+    "ANTHROPIC_API_KEY": "anthropic-secret",
+    "SESSION_SECRET": "session-secret",
+    "GOOGLE_CLIENT_SECRET": "google-secret",
+    "PATH": "/usr/bin",
+    "HOME": "/tmp",
+}
+ALL_LOCAL = {"PLANNER_PROVIDER": "ollama", "PLANNER_MODEL": "qwen3:8b",
+             "CODER_PROVIDER": "ollama", "CODER_MODEL": "qwen2.5-coder:7b", "OLLAMA_API_BASE": BASE}
+CLOUD_LOCAL = {"OPENAI_API_KEY": "test-secret", "PLANNER_MODEL": "gpt-5.4-mini",
+               "CODER_PROVIDER": "ollama", "CODER_MODEL": "qwen2.5-coder:7b", "OLLAMA_API_BASE": BASE}
+class RoleConfigTests(unittest.TestCase):
+    def test_legacy_openai_coder_equals_planner(self):
+        planner, coder = resolve_roles({"OPENAI_API_KEY": "k", "OPENAI_MODEL": "m1"})
+        self.assertEqual(planner, coder)
+        self.assertEqual((coder.name, coder.model, coder.api_key), ("openai", "m1", "k"))
+    def test_legacy_ollama_coder_equals_planner(self):
+        env = {"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen2.5:7b"}
+        planner, coder = resolve_roles(env)
+        self.assertEqual(planner, coder)
+        self.assertEqual(coder.ollama_api_base, BASE)
+    def test_empty_new_values_count_as_unset(self):
+        env = {"OPENAI_API_KEY": "k", "PLANNER_MODEL": "", "CODER_PROVIDER": "", "CODER_MODEL": ""}
+        planner, coder = resolve_roles(env)
+        self.assertEqual(planner, coder)
+    def test_model_overrides_and_defaults(self):
+        env = {"OPENAI_API_KEY": "k", "OPENAI_MODEL": "base", "CODER_MODEL": "big"}
+        planner, coder = resolve_roles(env)
+        self.assertEqual((planner.model, coder.model), ("base", "big"))
+        env = {"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "a", "PLANNER_MODEL": "b"}
+        planner, coder = resolve_roles(env)
+        self.assertEqual((planner.model, coder.model), ("b", "a"))
+    def test_combinations(self):
+        planner, coder = resolve_roles(ALL_LOCAL)
+        self.assertEqual((planner.name, planner.model, coder.name, coder.model),
+                         ("ollama", "qwen3:8b", "ollama", "qwen2.5-coder:7b"))
+        planner, coder = resolve_roles(CLOUD_LOCAL)
+        self.assertEqual((planner.name, coder.name), ("openai", "ollama"))
+        planner, coder = resolve_roles({"PLANNER_PROVIDER": "ollama", "PLANNER_MODEL": "q",
+                                        "CODER_PROVIDER": "openai", "OPENAI_API_KEY": "k"})
+        self.assertEqual((planner.name, coder.name, coder.model), ("ollama", "openai", "gpt-5.4-mini"))
+        planner, coder = resolve_roles({"OPENAI_API_KEY": "k", "CODER_PROVIDER": "openai",
+                                        "PLANNER_MODEL": "small", "CODER_MODEL": "large"})
+        self.assertEqual((planner.model, coder.model), ("small", "large"))
+    def test_errors_never_fall_back(self):
+        with self.assertRaisesRegex(PlannerConfigurationError, "CODER_PROVIDER must be"):
+            resolve_coder_provider({"OPENAI_API_KEY": "k", "CODER_PROVIDER": "bogus"})
+        with self.assertRaisesRegex(PlannerConfigurationError, "CODER_MODEL.*CODER_PROVIDER=ollama"):
+            resolve_coder_provider({"OPENAI_API_KEY": "k", "CODER_PROVIDER": "ollama"})
+        with self.assertRaisesRegex(PlannerConfigurationError, "OPENAI_API_KEY is required when CODER_PROVIDER=openai"):
+            resolve_roles({"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "m", "CODER_PROVIDER": "openai"})
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            resolve_roles({**CLOUD_LOCAL, "OLLAMA_API_BASE": "https://cloud.example"})
+        self.assertIn("CODER_PROVIDER=ollama", str(raised.exception))
+        self.assertNotIn("cloud.example", str(raised.exception))
+    def test_cloud_planner_local_coder_environment_isolation(self):
+        planner, coder = resolve_roles(CLOUD_LOCAL)
+        environment = provider_environment(coder, {**SECRETS, "OLLAMA_API_BASE": "ignored"})
+        for variable in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "SESSION_SECRET", "GOOGLE_CLIENT_SECRET"):
+            self.assertNotIn(variable, environment)
+        self.assertEqual(environment["OLLAMA_API_BASE"], BASE)
+        self.assertNotIn("test-secret", str(environment))
+        self.assertEqual(build_aider_command(coder, "t", ["a"])[5], "ollama_chat/qwen2.5-coder:7b")
+        self.assertEqual(planner.api_key, "test-secret")
+    def test_openai_coder_environment_has_only_its_own_credential(self):
+        _, coder = resolve_roles({"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "m",
+                                  "CODER_PROVIDER": "openai", "OPENAI_API_KEY": "test-secret",
+                                  "CODER_MODEL": "big"})
+        environment = provider_environment(coder, {**SECRETS, "HTTPS_PROXY": "http://proxy"})
+        self.assertEqual(environment["OPENAI_API_KEY"], "test-secret")
+        self.assertEqual(environment["HTTPS_PROXY"], "http://proxy")
+        for variable in ("ANTHROPIC_API_KEY", "SESSION_SECRET", "GOOGLE_CLIENT_SECRET"):
+            self.assertNotIn(variable, environment)
+        self.assertEqual(build_aider_command(coder, "t", [])[5], "big")
+    def test_ollama_planner_client_uses_placeholder_key(self):
+        planner, _ = resolve_roles({**ALL_LOCAL, "OPENAI_API_KEY": "test-secret"})
+        with patch("openai.OpenAI") as client:
+            create_planner_client(planner)
+        client.assert_called_once_with(api_key="ollama", base_url=BASE + "/v1")
+    def test_roles_info_and_local_only(self):
+        cases = {"all_local": (ALL_LOCAL, True), "cloud_local": (CLOUD_LOCAL, False),
+                 "all_cloud": ({"OPENAI_API_KEY": "test-secret"}, False)}
+        for name, (env, local_only) in cases.items():
+            with self.subTest(name):
+                info = roles_info(*resolve_roles(env))
+                self.assertEqual(info["local_only"], local_only)
+                self.assertNotIn("test-secret", str(info))
+        info = roles_info(*resolve_roles(CLOUD_LOCAL))
+        self.assertEqual(info["planner"], {"role": "planner", "name": "openai", "label": "OpenAI (cloud)",
+                         "model": "gpt-5.4-mini", "endpoint": "OpenAI-managed endpoint"})
+        self.assertEqual(info["coder"]["label"], "Ollama (local)")
+        self.assertEqual(info["coder"]["endpoint"], BASE + "/v1")
+    def test_route_reports_roles_and_keeps_provider_fields(self):
+        with patch.dict(os.environ, CLOUD_LOCAL, clear=True):
+            result = get_planner_provider()
+        self.assertEqual(result["name"], "openai")
+        self.assertFalse(result["roles"]["local_only"])
+        self.assertNotIn("test-secret", str(result))
+    def test_route_rejects_bad_coder_config_without_echo(self):
+        with patch.dict(os.environ, {**CLOUD_LOCAL, "OLLAMA_API_BASE": "https://cloud.example"}, clear=True):
+            with self.assertRaises(HTTPException) as raised:
+                get_planner_provider()
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertNotIn("cloud.example", str(raised.exception))
+    def test_ui_renders_roles_and_local_only_prefix(self):
+        self.assertIn("roles.local_only", PHONE_UI)
+        self.assertIn("Coder:", PHONE_UI)
+        self.assertNotIn("OPENAI_API_KEY", PHONE_UI)
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,8 +12,8 @@ Voice Developer receives the text from your device’s dictation. It doesn’t c
 
 You need Git, Bash, Python 3.10 or newer, Node.js with npm, and a model provider for the action you use. **Plan** uses OpenAI by default, or local Ollama when selected explicitly. **Generate** continues to use Anthropic for a direct edit:
 
-- OpenAI mode requires `OPENAI_API_KEY` and uses `OPENAI_MODEL` for planning and the queued Aider edits.
-- Ollama mode requires a running local Ollama server and the model named by `OLLAMA_MODEL`; it does not require OpenAI credentials.
+- The planner and the coder (the queued Aider edits) are configured separately; see [Planner and coder models](#planner-and-coder-models). With no new settings, both use the provider selected by `PLANNER_PROVIDER`, as before.
+- A role set to `openai` requires `OPENAI_API_KEY`. A role set to `ollama` requires a running local Ollama server and a model; it does not require OpenAI credentials.
 - `ANTHROPIC_API_KEY` is used by **Generate** and is unchanged by the planner provider setting.
 
 For Google sign-in, create a Google OAuth client of type **Web application**. The controller generates its callback from the URL used to open it, so every URL you use for sign-in must have an exact matching authorized redirect URI. Add the Google accounts allowed to use the app as test users when the consent screen is in testing mode.
@@ -147,21 +147,73 @@ The authenticated `/status` endpoint is available at port `8040`, but the contro
 | Component | Role |
 | --- | --- |
 | FastAPI controller at the configured host, default `127.0.0.1:8040` | Serves the prompt UI, handles Google sign-in, manages the active workspace and saved apps, and reports job progress to the browser. |
-| Plan → selected provider → Aider | The planner sends your prompt and app context to the provider selected by `PLANNER_PROVIDER`, turns the response into a task list, and queues it. In `openai` mode, both planning and the queued Aider worker use OpenAI. In `ollama` mode, both use the configured local Ollama-compatible endpoint and model, with cloud credentials removed from the Aider environment and no cloud fallback. The in-process worker runs Aider against the React source one task at a time. |
+| Plan → planner model → coder model (Aider) | The planner sends your prompt and app context to the provider selected by `PLANNER_PROVIDER` and `PLANNER_MODEL`, turns the response into a task list, and queues it. The in-process worker runs Aider with the coder provider and model (`CODER_PROVIDER`, `CODER_MODEL`) against the React source one task at a time. Each role set to `ollama` uses the loopback Ollama endpoint with no cloud credentials in its environment and never falls back to a cloud provider. The coder defaults to the planner's provider and model settings. |
 | Generate → Aider → Anthropic | Runs a direct edit without the planning queue. Aider receives your prompt and relevant JavaScript and JSX files. This path still uses `ANTHROPIC_API_KEY` and is unaffected by `PLANNER_PROVIDER`. |
 | React and Vite at the configured host, default `127.0.0.1:5773` | Serves the current app in an iframe inside the controller. Vite watches the files and updates the preview when they change. |
 | Local filesystem | The active app lives in `generated-app/`. Saved snapshots live in `saved-apps/`, which Git ignores because they belong to each local workspace. Copy that folder separately to back up or move your saved apps. The queue lives in controller memory, so restarting it clears job status. |
 
 Each clone has one active workspace. Browser tabs connected to the same controller see the same app and job queue. The controller runs its own queue worker, so you can use the app without starting the separate CLI utilities in `worker/`.
 
+## Planner and coder models
+Plan uses two independently configured roles, set only in `controller/.env` (there is no UI setting):
+| Variable | Meaning | Default when unset |
+| --- | --- | --- |
+| `PLANNER_PROVIDER` | `openai` or `ollama` for the planner | `openai` |
+| `PLANNER_MODEL` | Planner model | `OPENAI_MODEL` (default `gpt-5.4-mini`) or `OLLAMA_MODEL`, by planner provider |
+| `CODER_PROVIDER` | `openai` or `ollama` for the queued Aider edits | the planner provider |
+| `CODER_MODEL` | Coder (Aider) model | `OPENAI_MODEL` or `OLLAMA_MODEL`, by coder provider |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_API_BASE` | Existing settings; shared by both roles | unchanged |
+Existing `.env` files that set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL` behave exactly as before. An empty value counts as unset. Both roles share one `OLLAMA_API_BASE`, which must be loopback (`localhost`, `127.0.0.1`, or `::1`), and one `OPENAI_API_KEY`.
+
+Bad configuration fails with a clear message and never falls back from a local role to a cloud one: an invalid provider name, `openai` without `OPENAI_API_KEY`, `ollama` without a model, or a non-loopback `OLLAMA_API_BASE`. A bad coder setting also fails **Plan** up front, so you never get a plan that cannot run.
+
+Example combinations:
+- **All local.** Run `ollama pull qwen3:8b qwen2.5-coder:7b` yourself first.
+  ```
+  PLANNER_PROVIDER=ollama
+  PLANNER_MODEL=qwen3:8b
+  CODER_PROVIDER=ollama
+  CODER_MODEL=qwen2.5-coder:7b
+  OLLAMA_API_BASE=http://127.0.0.1:11434
+  ```
+  With models you already have, use `PLANNER_MODEL=qwen2.5:7b` and `CODER_MODEL=qwen2.5:7b`, or just the legacy `PLANNER_PROVIDER=ollama` and `OLLAMA_MODEL=qwen2.5:7b`.
+- **Cloud planner, local coder.** Your prompt and app context go to OpenAI for planning. Aider edits stay local, and the Aider process does not receive `OPENAI_API_KEY`.
+  ```
+  PLANNER_PROVIDER=openai
+  OPENAI_API_KEY=...
+  PLANNER_MODEL=gpt-5.4-mini
+  CODER_PROVIDER=ollama
+  CODER_MODEL=qwen2.5-coder:7b
+  OLLAMA_API_BASE=http://127.0.0.1:11434
+  ```
+- **All cloud.**
+  ```
+  PLANNER_PROVIDER=openai
+  CODER_PROVIDER=openai
+  PLANNER_MODEL=gpt-5.4-mini
+  CODER_MODEL=<stronger model>
+  OPENAI_API_KEY=...
+  ```
+- **Legacy, unchanged.** Set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL`.
+
+Credential isolation per role: an `ollama` Aider process gets a small allowlist of environment variables plus `OLLAMA_API_BASE`. An `openai` Aider process gets the same allowlist plus `OPENAI_API_KEY`, optional `OPENAI_API_BASE`/`OPENAI_BASE_URL`/`OPENAI_ORG_ID`, and proxy and certificate variables. It no longer inherits unrelated secrets such as `ANTHROPIC_API_KEY`, `GOOGLE_CLIENT_SECRET`, or `SESSION_SECRET`. The controller badge shows planner and coder provider and model separately and shows `Local-only` only when both are `ollama`.
+
+Local model caveats on an M2 Pro with 16 GB RAM:
+- Models of about 7-8B fit. `qwen3:14b` is likely to swap.
+- Ollama defaults to a small context window (often 2048-4096 tokens; check `ollama show <model>`). That truncates Aider's repo map and file contents. Raise it with `OLLAMA_CONTEXT_LENGTH` in the Ollama server environment or `num_ctx` in a Modelfile, which also raises RAM use.
+- Two different local models loaded at once cost RAM for both. `OLLAMA_MAX_LOADED_MODELS=1` makes Ollama swap them, which is slower per task but safe.
+- Aider has a 120 s timeout per task in `job_worker`, so slow local models may time out.
+
+Restart the controller after editing `.env` (`./stop.sh`, then `./start.sh`).
+
 ## Model providers
 
-`PLANNER_PROVIDER` explicitly selects the provider for **Plan**. It defaults to `openai`, preserving the existing behavior:
+`PLANNER_PROVIDER` explicitly selects the planner provider (and, unless `CODER_PROVIDER` is set, the coder provider). It defaults to `openai`, preserving the existing behavior:
 
 - `PLANNER_PROVIDER=openai` uses `OPENAI_MODEL` (default `gpt-5.4-mini`) for the planning request and the same OpenAI model for queued Aider edits. `OPENAI_API_KEY` is required.
 - `PLANNER_PROVIDER=ollama` uses `OLLAMA_MODEL` and `OLLAMA_API_BASE` for both planning and queued Aider edits. The recommended local values are `qwen2.5:7b` and `http://127.0.0.1:11434`. Ollama mode is local-only: it requires the selected endpoint and model, never falls back to OpenAI or another cloud provider, and does not need `OPENAI_API_KEY` or `OPENAI_API_BASE`.
 
-`Generate` remains the separate Anthropic direct-edit path and continues to use `ANTHROPIC_API_KEY`; changing `PLANNER_PROVIDER` does not change it. Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.
+`Generate` remains the separate Anthropic direct-edit path and continues to use `ANTHROPIC_API_KEY`; the planner and coder settings do not change it. Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.
 
 The local `qwen2.5:7b` model has no cloud credentials to configure, but a 7B model may produce less consistent plans or edits than a larger model. Its speed and context capacity also depend on local hardware and the model's Ollama installation. Pull and test the model before selecting it for regular edits.
 

@@ -155,31 +155,46 @@ def _normalize_ollama_api_base(value: str) -> str:
     return base
 
 
-def resolve_planner_provider(env: dict[str, str] | None = None) -> PlannerProvider:
-    """Resolve and validate the explicitly selected planner provider."""
-    values = os.environ if env is None else env
-    provider_name = values.get("PLANNER_PROVIDER", "openai").strip().lower() or "openai"
-    if provider_name not in {"openai", "ollama"}:
-        raise PlannerConfigurationError(
-            "PLANNER_PROVIDER must be either 'openai' or 'ollama'"
-        )
-
+_VALID_PROVIDERS = {"openai", "ollama"}
+def _provider_name(values, provider_var: str, default: str) -> str:
+    name = values.get(provider_var, "").strip().lower() or default
+    if name not in _VALID_PROVIDERS:
+        raise PlannerConfigurationError(f"{provider_var} must be either 'openai' or 'ollama'")
+    return name
+def _resolve_role(values, provider_var: str, model_var: str, default_provider: str) -> PlannerProvider:
+    """Resolve one role (planner or coder). A bad setting raises; it never falls back to another provider."""
+    provider_name = _provider_name(values, provider_var, default_provider)
+    role_model = values.get(model_var, "").strip()
     if provider_name == "openai":
         api_key = values.get("OPENAI_API_KEY", "").strip()
         if not api_key:
-            raise PlannerConfigurationError("OPENAI_API_KEY is required when PLANNER_PROVIDER=openai")
-        model = values.get("OPENAI_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
+            raise PlannerConfigurationError(f"OPENAI_API_KEY is required when {provider_var}=openai")
+        model = role_model or values.get("OPENAI_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
         return PlannerProvider(name="openai", model=model, api_key=api_key)
-
-    model = values.get("OLLAMA_MODEL", "").strip()
+    model = role_model or values.get("OLLAMA_MODEL", "").strip()
     if not model:
-        raise PlannerConfigurationError("OLLAMA_MODEL is required when PLANNER_PROVIDER=ollama")
-    api_base = _normalize_ollama_api_base(
-        values.get("OLLAMA_API_BASE", "http://127.0.0.1:11434")
-    )
+        raise PlannerConfigurationError(
+            f"OLLAMA_MODEL (or {model_var}) is required when {provider_var}=ollama"
+        )
+    try:
+        api_base = _normalize_ollama_api_base(
+            values.get("OLLAMA_API_BASE", "http://127.0.0.1:11434")
+        )
+    except PlannerConfigurationError as exc:
+        raise PlannerConfigurationError(f"{provider_var}=ollama: {exc}") from None
     return PlannerProvider(name="ollama", model=model, ollama_api_base=api_base)
-
-
+def resolve_planner_provider(env: dict[str, str] | None = None) -> PlannerProvider:
+    """Resolve and validate the explicitly selected planner provider."""
+    values = os.environ if env is None else env
+    return _resolve_role(values, "PLANNER_PROVIDER", "PLANNER_MODEL", "openai")
+def resolve_coder_provider(env: dict[str, str] | None = None) -> PlannerProvider:
+    """Resolve the coder (Aider) provider; it defaults to the planner's provider name."""
+    values = os.environ if env is None else env
+    default = _provider_name(values, "PLANNER_PROVIDER", "openai")
+    return _resolve_role(values, "CODER_PROVIDER", "CODER_MODEL", default)
+def resolve_roles(env: dict[str, str] | None = None) -> tuple[PlannerProvider, PlannerProvider]:
+    """Resolve (planner, coder) together so bad coder config fails before any planning."""
+    return resolve_planner_provider(env), resolve_coder_provider(env)
 def create_planner_client(provider: PlannerProvider):
     """Create the OpenAI-compatible client for the selected provider."""
     from openai import OpenAI
@@ -206,23 +221,41 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
     }
 
 
-def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Build subprocess environment without cloud credentials in Ollama mode."""
-    source = os.environ if base_env is None else base_env
+def role_provider_info(role: str, provider: PlannerProvider) -> dict[str, str]:
+    """Safe per-role evidence (no keys)."""
     if provider.name == "ollama":
-        environment = {
-            variable: value
-            for variable, value in source.items()
-            if variable in _OLLAMA_SUBPROCESS_ENV_VARS
-        }
+        label, endpoint = "Ollama (local)", provider.planner_base_url
+    else:
+        label, endpoint = "OpenAI (cloud)", "OpenAI-managed endpoint"
+    return {"role": role, "name": provider.name, "label": label,
+            "model": provider.model, "endpoint": endpoint}
+def roles_info(planner: PlannerProvider, coder: PlannerProvider) -> dict:
+    return {
+        "planner": role_provider_info("planner", planner),
+        "coder": role_provider_info("coder", coder),
+        "local_only": planner.name == "ollama" and coder.name == "ollama",
+    }
+_OPENAI_OPTIONAL_ENV_VARS = frozenset({
+    "OPENAI_API_BASE", "OPENAI_BASE_URL", "OPENAI_ORG_ID",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+})
+def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a role's subprocess environment: allowlist plus only that role's own endpoint/credential."""
+    source = os.environ if base_env is None else base_env
+    environment = {
+        variable: value
+        for variable, value in source.items()
+        if variable in _OLLAMA_SUBPROCESS_ENV_VARS
+    }
+    if provider.name == "ollama":
         environment["OLLAMA_API_BASE"] = provider.ollama_api_base
         return environment
-
-    environment = dict(source)
+    for variable in _OPENAI_OPTIONAL_ENV_VARS:
+        if variable in source:
+            environment[variable] = source[variable]
     environment["OPENAI_API_KEY"] = provider.api_key
     return environment
-
-
 def build_aider_command(provider: PlannerProvider, task_prompt: str, files: list[str]) -> list[str]:
     """Build the queued Aider invocation for the selected provider."""
     return [
@@ -244,7 +277,7 @@ async def job_worker():
         job = jobs[job_id]
         job['status'] = 'running'
         try:
-            provider = resolve_planner_provider()
+            _, provider = resolve_roles()
         except PlannerConfigurationError as exc:
             job['status'] = 'failed'
             job['error'] = str(exc)
@@ -579,14 +612,23 @@ PHONE_UI = """<!doctype html>
     restoreProcessingState();
 
     function renderPlannerProvider(provider) {
+      const roles = provider && provider.roles;
+      if (roles && roles.planner && roles.coder) {
+        const part = (r) => `${r.label} ${r.model}`;
+        const prefix = roles.local_only ? 'Local-only: ' : '';
+        document.getElementById('providerStatus').textContent =
+          `${prefix}Planner: ${part(roles.planner)} | Coder: ${part(roles.coder)}`;
+        return;
+      }
       if (!provider || !provider.label || !provider.endpoint) return;
       document.getElementById('providerStatus').textContent = `Planner: ${provider.label} — ${provider.endpoint}`;
     }
-
-    function showPlannerConfigurationError() {
-      document.getElementById('providerStatus').textContent = 'Planner configuration error — check provider settings';
+    function jobProvider(job) {
+      return job.roles ? { ...(job.provider || {}), roles: job.roles } : job.provider;
     }
-
+    function showPlannerConfigurationError() {
+      document.getElementById('providerStatus').textContent = 'Planner/coder configuration error — check provider settings';
+    }
     (async function loadPlannerProvider() {
       try {
         const res = await fetch('/planner-provider');
@@ -597,7 +639,7 @@ PHONE_UI = """<!doctype html>
         }
         renderPlannerProvider(data);
       } catch (e) {
-        document.getElementById('providerStatus').textContent = 'Planner unavailable — controller could not report provider';
+        document.getElementById('providerStatus').textContent = 'Planner/coder unavailable — controller could not report providers';
       }
     })();
 
@@ -619,7 +661,7 @@ PHONE_UI = """<!doctype html>
         if (!res.ok) return;
         const job = await res.json();
         if (!job) { alert('No active plan running.'); return; }
-        renderPlannerProvider(job.provider);
+        renderPlannerProvider(jobProvider(job));
         document.getElementById('fullPlanText').textContent = job.plan || '';
         renderTaskList(job.tasks);
         updateTaskList(job);
@@ -638,7 +680,7 @@ PHONE_UI = """<!doctype html>
         if (!res.ok) return;
         const job = await res.json();
         if (!job) return;
-        renderPlannerProvider(job.provider);
+        renderPlannerProvider(jobProvider(job));
         if (job.status === 'queued' || job.status === 'running') {
           localStorage.setItem('activeJobId', job.job_id);
           setExecuting(true);
@@ -663,7 +705,7 @@ PHONE_UI = """<!doctype html>
         });
         const data = await res.json();
         if (res.ok) {
-          renderPlannerProvider(data.provider);
+          renderPlannerProvider(jobProvider(data));
           localStorage.setItem('activeJobId', data.job_id);
           document.getElementById('fullPlanText').textContent = data.plan;
           renderTaskList(data.tasks || []);
@@ -701,7 +743,7 @@ PHONE_UI = """<!doctype html>
 
     function updateTaskList(job) {
       const icons = { pending: '○', running: '⟳', done: '✓', failed: '✗' };
-      renderPlannerProvider(job.provider);
+      renderPlannerProvider(jobProvider(job));
       job.tasks.forEach((task, i) => {
         const taskEl = document.getElementById(`task-${i}`);
         if (!taskEl) return;
@@ -1190,7 +1232,8 @@ def _planner_user_msg(prompt: str) -> str:
 @app.get("/planner-provider")
 def get_planner_provider():
     try:
-        return planner_provider_info(resolve_planner_provider())
+        planner, coder = resolve_roles()
+        return {**planner_provider_info(planner), "roles": roles_info(planner, coder)}
     except PlannerConfigurationError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -1199,7 +1242,7 @@ def get_planner_provider():
 async def plan(req: PlanRequest):
     """Generate a plan and enqueue it as a background job."""
     try:
-        provider = resolve_planner_provider()
+        provider, coder = resolve_roles()
     except PlannerConfigurationError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -1269,6 +1312,7 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
             "created_at": datetime.now().isoformat(),
             "error": None,
             "provider": planner_provider_info(provider),
+            "roles": roles_info(provider, coder),
         }
         await job_queue.put(job_id)
 
@@ -1280,6 +1324,7 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
             "task_count": len(tasks),
             "queue_position": job_queue.qsize(),
             "provider": planner_provider_info(provider),
+            "roles": roles_info(provider, coder),
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")
