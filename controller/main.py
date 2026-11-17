@@ -109,23 +109,24 @@ class PlannerProvider:
         return self.model
 
 
-_CLOUD_PROVIDER_ENV_VARS = (
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-    "OPENAI_API_BASE",
-    "AZURE_OPENAI_API_KEY",
-    "AZURE_OPENAI_ENDPOINT",
-    "AZURE_OPENAI_BASE_URL",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_BASE_URL",
-    "GOOGLE_API_KEY",
-    "GOOGLE_BASE_URL",
-    "GOOGLE_API_BASE",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GEMINI_API_KEY",
-    "GEMINI_BASE_URL",
-    "GEMINI_API_BASE",
-)
+_OLLAMA_SUBPROCESS_ENV_VARS = frozenset({
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TERM",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "USER",
+    "VIRTUAL_ENV",
+})
 
 
 def _normalize_ollama_api_base(value: str) -> str:
@@ -207,13 +208,18 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
 
 def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | None = None) -> dict[str, str]:
     """Build subprocess environment without cloud credentials in Ollama mode."""
-    environment = dict(os.environ if base_env is None else base_env)
+    source = os.environ if base_env is None else base_env
     if provider.name == "ollama":
-        for variable in _CLOUD_PROVIDER_ENV_VARS:
-            environment.pop(variable, None)
+        environment = {
+            variable: value
+            for variable, value in source.items()
+            if variable in _OLLAMA_SUBPROCESS_ENV_VARS
+        }
         environment["OLLAMA_API_BASE"] = provider.ollama_api_base
-    else:
-        environment["OPENAI_API_KEY"] = provider.api_key
+        return environment
+
+    environment = dict(source)
+    environment["OPENAI_API_KEY"] = provider.api_key
     return environment
 
 

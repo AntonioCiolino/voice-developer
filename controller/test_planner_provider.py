@@ -133,41 +133,44 @@ class PlannerProviderTests(unittest.TestCase):
             "PLANNER_PROVIDER": "ollama",
             "OLLAMA_MODEL": "qwen2.5:7b",
         })
-        environment = provider_environment(provider, {
+        cloud_environment = {
             "OPENAI_API_KEY": "test-openai-key",
             "OPENAI_BASE_URL": "https://cloud.example",
             "OPENAI_API_BASE": "https://cloud.example/v1",
-            "ANTHROPIC_API_KEY": "test-anthropic-key",
-            "ANTHROPIC_BASE_URL": "https://cloud.example/anthropic",
             "AZURE_OPENAI_API_KEY": "test-azure-key",
             "AZURE_OPENAI_ENDPOINT": "https://cloud.example/azure",
+            "ANTHROPIC_API_KEY": "test-anthropic-key",
+            "ANTHROPIC_BASE_URL": "https://cloud.example/anthropic",
             "GOOGLE_API_KEY": "test-google-key",
-            "GOOGLE_BASE_URL": "https://cloud.example/google",
             "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/google-credentials.json",
             "GEMINI_API_KEY": "test-gemini-key",
-            "GEMINI_API_BASE": "https://cloud.example/gemini",
+            "OPENROUTER_API_KEY": "test-openrouter-key",
+            "DEEPSEEK_API_KEY": "test-deepseek-key",
+            "MISTRAL_API_KEY": "test-mistral-key",
+            "COHERE_API_KEY": "test-cohere-key",
+            "GROQ_API_KEY": "test-groq-key",
+            "TOGETHER_API_KEY": "test-together-key",
+            "XAI_API_KEY": "test-xai-key",
+            "AWS_ACCESS_KEY_ID": "test-access-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret-key",
+            "AWS_SESSION_TOKEN": "test-session-token",
+            "AWS_PROFILE": "test-profile",
+            "AWS_BEARER_TOKEN_BEDROCK": "test-bedrock-token",
+            "BEDROCK_API_KEY": "test-bedrock-key",
+            "AIDER_API_KEY": "test-aider-key",
+            "AIDER_API_BASE": "https://cloud.example/aider",
             "PATH": "/usr/bin",
-        })
+            "HOME": "/tmp",
+        }
+        environment = provider_environment(provider, cloud_environment)
 
-        for variable in (
-            "OPENAI_API_KEY",
-            "OPENAI_BASE_URL",
-            "OPENAI_API_BASE",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "AZURE_OPENAI_API_KEY",
-            "AZURE_OPENAI_ENDPOINT",
-            "GOOGLE_API_KEY",
-            "GOOGLE_BASE_URL",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "GEMINI_API_KEY",
-            "GEMINI_API_BASE",
-        ):
+        for variable in set(cloud_environment) - {"PATH", "HOME"}:
             with self.subTest(variable=variable):
                 self.assertNotIn(variable, environment)
 
         self.assertEqual(environment["OLLAMA_API_BASE"], "http://127.0.0.1:11434")
         self.assertEqual(environment["PATH"], "/usr/bin")
+        self.assertEqual(environment["HOME"], "/tmp")
 
     def test_openai_environment_keeps_selected_key(self):
         provider = resolve_planner_provider({"OPENAI_API_KEY": "test-key"})

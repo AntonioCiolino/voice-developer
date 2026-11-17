@@ -165,19 +165,34 @@ Each clone has one active workspace. Browser tabs connected to the same controll
 
 The local `qwen2.5:7b` model has no cloud credentials to configure, but a 7B model may produce less consistent plans or edits than a larger model. Its speed and context capacity also depend on local hardware and the model's Ollama installation. Pull and test the model before selecting it for regular edits.
 
-To test only the local planning request without calling `/plan`, enqueueing a job, or editing `generated-app`, run this from the repository root. The command prints only a success message and deliberately unsets the OpenAI variables:
+To test only the local planning request without calling `/plan`, enqueueing a job, or editing `generated-app`, run this from the repository root. The command disables `.env` loading for the smoke process, unsets the cloud-provider variables, and prints safe provider evidence without credentials:
 
 ```sh
 (
   cd controller
-  env -u OPENAI_API_KEY -u OPENAI_API_BASE \
+  env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_BASE \
+    -u AZURE_OPENAI_API_KEY -u AZURE_OPENAI_ENDPOINT -u AZURE_OPENAI_BASE_URL \
+    -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \
+    -u GOOGLE_API_KEY -u GOOGLE_BASE_URL -u GOOGLE_API_BASE \
+    -u GOOGLE_APPLICATION_CREDENTIALS -u GEMINI_API_KEY -u GEMINI_BASE_URL -u GEMINI_API_BASE \
+    -u OPENROUTER_API_KEY -u OPENROUTER_API_BASE \
+    -u DEEPSEEK_API_KEY -u DEEPSEEK_API_BASE \
+    -u MISTRAL_API_KEY -u MISTRAL_API_BASE \
+    -u COHERE_API_KEY -u COHERE_API_BASE \
+    -u GROQ_API_KEY -u GROQ_API_BASE -u TOGETHER_API_KEY -u TOGETHER_API_BASE \
+    -u XAI_API_KEY -u XAI_API_BASE \
+    -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+    -u AWS_PROFILE -u AWS_REGION -u AWS_DEFAULT_REGION -u AWS_BEARER_TOKEN_BEDROCK \
+    -u BEDROCK_API_KEY -u AIDER_API_KEY -u AIDER_API_BASE \
+    PYTHON_DOTENV_DISABLED=1 \
     PLANNER_PROVIDER=ollama \
     OLLAMA_MODEL=qwen2.5:7b \
     OLLAMA_API_BASE=http://127.0.0.1:11434 \
     ./venv/bin/python - <<'PY'
-from main import create_planner_client, resolve_planner_provider
+from main import create_planner_client, planner_provider_info, resolve_planner_provider
 
 provider = resolve_planner_provider()
+print("PROVIDER_EVIDENCE", planner_provider_info(provider))
 response = create_planner_client(provider).chat.completions.create(
     model=provider.model,
     messages=[
@@ -191,6 +206,8 @@ print("Ollama planning-only smoke passed")
 PY
 )
 ```
+
+Expected provider evidence includes `label: 'Ollama / local-only'` and `endpoint: 'http://127.0.0.1:11434/v1'`. This proves the application selected and used the validated loopback endpoint for this planner request. It does not prove that unrelated operating-system processes made no network connections, and it does not change or enforce firewall or router policy. To inspect the planner process during the request when practical, use `lsof -nP -a -p <planner-pid> -iTCP -sTCP:ESTABLISHED`.
 
 Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI and Anthropic in addition to the explicit Ollama planner path. [Aider provider documentation](https://aider.chat/docs/llms.html)
 
