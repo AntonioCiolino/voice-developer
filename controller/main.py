@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -83,6 +85,105 @@ class LoadAppRequest(BaseModel):
     name: str
 
 
+class PlannerConfigurationError(ValueError):
+    """Raised when the selected planner provider is not configured."""
+
+
+@dataclass(frozen=True)
+class PlannerProvider:
+    name: str
+    model: str
+    api_key: str | None = None
+    ollama_api_base: str | None = None
+
+    @property
+    def planner_base_url(self) -> str | None:
+        if self.name == "ollama":
+            return f"{self.ollama_api_base}/v1"
+        return None
+
+    @property
+    def aider_model(self) -> str:
+        if self.name == "ollama":
+            return f"ollama_chat/{self.model}"
+        return self.model
+
+
+_CLOUD_PROVIDER_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_BASE",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+)
+
+
+def _normalize_ollama_api_base(value: str) -> str:
+    base = value.strip().rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3].rstrip("/")
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+        raise PlannerConfigurationError(
+            "OLLAMA_API_BASE must be an HTTP(S) URL without a query or fragment"
+        )
+    return base
+
+
+def resolve_planner_provider(env: dict[str, str] | None = None) -> PlannerProvider:
+    """Resolve and validate the explicitly selected planner provider."""
+    values = os.environ if env is None else env
+    provider_name = values.get("PLANNER_PROVIDER", "openai").strip().lower() or "openai"
+    if provider_name not in {"openai", "ollama"}:
+        raise PlannerConfigurationError(
+            "PLANNER_PROVIDER must be either 'openai' or 'ollama'"
+        )
+
+    if provider_name == "openai":
+        api_key = values.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise PlannerConfigurationError("OPENAI_API_KEY is required when PLANNER_PROVIDER=openai")
+        model = values.get("OPENAI_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
+        return PlannerProvider(name="openai", model=model, api_key=api_key)
+
+    model = values.get("OLLAMA_MODEL", "").strip()
+    if not model:
+        raise PlannerConfigurationError("OLLAMA_MODEL is required when PLANNER_PROVIDER=ollama")
+    api_base = _normalize_ollama_api_base(
+        values.get("OLLAMA_API_BASE", "http://127.0.0.1:11434")
+    )
+    return PlannerProvider(name="ollama", model=model, ollama_api_base=api_base)
+
+
+def create_planner_client(provider: PlannerProvider):
+    """Create the OpenAI-compatible client for the selected provider."""
+    from openai import OpenAI
+
+    if provider.name == "ollama":
+        return OpenAI(api_key="ollama", base_url=provider.planner_base_url)
+    return OpenAI(api_key=provider.api_key)
+
+
+def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Build subprocess environment without cloud credentials in Ollama mode."""
+    environment = dict(os.environ if base_env is None else base_env)
+    if provider.name == "ollama":
+        for variable in _CLOUD_PROVIDER_ENV_VARS:
+            environment.pop(variable, None)
+        environment["OLLAMA_API_BASE"] = provider.ollama_api_base
+    else:
+        environment["OPENAI_API_KEY"] = provider.api_key
+    return environment
+
+
+def build_aider_command(provider: PlannerProvider, task_prompt: str, files: list[str]) -> list[str]:
+    """Build the queued Aider invocation for the selected provider."""
+    return [
+        "aider", "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
+        "--model", provider.aider_model, "--message", task_prompt, *files,
+    ]
+
+
 def extract_cost(log: str) -> str:
     m = re.search(r'Cost:\s*(\$[\d.]+)\s*message', log)
     return m.group(1) if m else ''
@@ -95,7 +196,14 @@ async def job_worker():
         active_job_id = job_id
         job = jobs[job_id]
         job['status'] = 'running'
-        api_key = os.getenv("OPENAI_API_KEY")
+        try:
+            provider = resolve_planner_provider()
+        except PlannerConfigurationError as exc:
+            job['status'] = 'failed'
+            job['error'] = str(exc)
+            active_job_id = None
+            job_queue.task_done()
+            continue
 
         for i, task_desc in enumerate(job['tasks']):
             job['current_task'] = i
@@ -134,10 +242,9 @@ async def job_worker():
             try:
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda tp=task_prompt, fl=files: subprocess.run(
-                    ["aider", "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
-                     "--model", "gpt-5.4-mini", "--message", tp, *fl],
+                    build_aider_command(provider, tp, fl),
                     cwd=str(REPO_ROOT),
-                    env={**os.environ, "OPENAI_API_KEY": api_key},
+                    env=provider_environment(provider),
                     capture_output=True, text=True, timeout=120,
                     stdin=subprocess.DEVNULL,
                 ))
@@ -1007,16 +1114,16 @@ def _planner_user_msg(prompt: str) -> str:
 @app.post("/plan")
 async def plan(req: PlanRequest):
     """Generate a plan and enqueue it as a background job."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+    try:
+        provider = resolve_planner_provider()
+    except PlannerConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
+    client = create_planner_client(provider)
 
     try:
         response = client.chat.completions.create(
-            model="gpt-5.4-mini",
+            model=provider.model,
             messages=[
                 {
                     "role": "system",
