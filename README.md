@@ -10,11 +10,10 @@ Voice Developer receives the text from your device’s dictation. It doesn’t c
 
 ### Prerequisites
 
-You need Git, Bash, Python 3.10 or newer, Node.js with npm, and either model-provider credentials or a local Ollama installation. The controller also needs an Aider-compatible model for the action you use:
+You need Git, Bash, Python 3.10 or newer, Node.js with npm, and model-provider credentials. The controller also needs an Aider-compatible model for the action you use:
 
 - `OPENAI_API_KEY` is used by **Plan** to create the task list and by the queued worker to apply the tasks.
 - `ANTHROPIC_API_KEY` is used by **Generate** for a direct edit.
-- Setting `OLLAMA_MODEL` switches both actions to a downloaded local Ollama model and does not require either cloud model key.
 
 For Google sign-in, create a Google OAuth client of type **Web application**. The controller generates its callback from the URL used to open it, so every URL you use for sign-in must have an exact matching authorized redirect URI. Add the Google accounts allowed to use the app as test users when the consent screen is in testing mode.
 
@@ -26,7 +25,7 @@ From the repository root, run setup once:
 
 `setup.sh` creates `controller/venv`, installs `controller/requirements.txt`, runs `npm install` in `generated-app`, and copies `controller/.env.example` to `controller/.env` only when that file does not already exist. It does not make model API calls. Fill in `controller/.env` before starting the app. Keep that file private; it is ignored by Git.
 
-For the normal Google-authenticated mode, set these values in `controller/.env`:
+Set these values in `controller/.env` for Google sign-in:
 
 ```dotenv
 OPENAI_API_KEY=your-openai-key
@@ -43,14 +42,7 @@ SESSION_SECRET=generated-64-hex-character-value
 python3 -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
-The model keys are needed only for the corresponding action. If you use Ollama instead, set a downloaded model and its local endpoint:
-
-```dotenv
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_API_BASE=http://127.0.0.1:11434
-```
-
-`OLLAMA_API_BASE` must remain a local HTTP Ollama endpoint. Do not use an Ollama cloud model or a remote endpoint with this application.
+The model keys are needed only for the corresponding action.
 
 ### Local Mac use
 
@@ -68,7 +60,7 @@ The loopback OAuth callback is:
 http://127.0.0.1:8040/auth/callback
 ```
 
-Register that exact URI in the Google OAuth client when you use the controller from the Mac itself. The normal mode requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ALLOWED_EMAILS`, and a 64-character hexadecimal `SESSION_SECRET`.
+Register that exact URI in the Google OAuth client when you use the controller from the Mac itself. The controller requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ALLOWED_EMAILS`, and a 64-character hexadecimal `SESSION_SECRET`.
 
 ### Mac access from a phone on the same network
 
@@ -85,23 +77,12 @@ The phone URL is [http://r2m2.local:8040](http://r2m2.local:8040), and the previ
 The phone path has important limitations:
 
 - The preview has no sign-in of its own. The controller protects the UI and API, but anyone who can reach the preview port can load the generated app directly.
-- `VOICE_DEVELOPER_LOCAL_AUTH=1` is only for a browser on the same computer. The controller rejects non-loopback hostnames and clients in that mode, so it cannot be used for phone access.
 - Google OAuth requires the callback URL to match the hostname used by the browser. For a non-loopback hostname, register the exact callback, such as `http://r2m2.local:8040/auth/callback` or `http://<mac-lan-address>:8040/auth/callback`, only if the Google OAuth client accepts it. Google web OAuth generally requires HTTPS for non-localhost redirect URIs. This repository does not provide TLS or a reverse proxy, so direct phone sign-in over plain HTTP may not work.
-- Do not expose ports `8040` or `5773` to the public internet. Use the normal Google-authenticated mode and a trusted LAN only.
-
-For a single-user Mac session without Google sign-in, use loopback only:
-
-```dotenv
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_API_BASE=http://127.0.0.1:11434
-VOICE_DEVELOPER_LOCAL_AUTH=1
-```
-
-Then run `./start.sh` without `VOICE_DEVELOPER_HOST`. This mode requires the default `127.0.0.1` binding and cannot be combined with phone access.
+- Do not expose ports `8040` or `5773` to the public internet. Use Google-authenticated mode and a trusted LAN only.
 
 ### Azure VM use
 
-The repository does not provision an Azure VM, install packages on it, create a service, configure TLS, or manage secrets. Before using it, you need an existing Linux VM, SSH access, an Azure CLI installation with `az login`, and permission to modify the VM’s network security group. The VM also needs Git, Bash, Python 3.10 or newer, Node.js with npm, and the model credentials or local Ollama setup described above.
+The repository does not provision an Azure VM, install packages on it, create a service, configure TLS, or manage secrets. Before using it, you need an existing Linux VM, SSH access, an Azure CLI installation with `az login`, and permission to modify the VM’s network security group. The VM also needs Git, Bash, Python 3.10 or newer, Node.js with npm, and the model credentials and Google authentication values described above.
 
 Copy or clone the repository on the VM, run `./setup.sh`, and create `controller/.env` with the required model and authentication values. Use a strong `SESSION_SECRET`; do not put secrets in `azure-setup.sh`, the shell history, or the README.
 
@@ -156,47 +137,31 @@ To stop and restart the foreground service, press **Ctrl+C** and rerun the same 
 ss -ltn | grep -E ':(8040|5773)\b'
 ```
 
-The authenticated `/status` endpoint is available at port `8040`, but normal mode redirects unauthenticated requests to `/auth/login`. A simple listener check is therefore more useful before signing in. The VM must remain running for the foreground processes to remain available; use a service manager or terminal multiplexer only if you configure that separately.
+The authenticated `/status` endpoint is available at port `8040`, but the controller redirects unauthenticated requests to `/auth/login`. A simple listener check is therefore more useful before signing in. The VM must remain running for the foreground processes to remain available; use a service manager or terminal multiplexer only if you configure that separately.
 
 ## How it works
 
 | Component | Role |
 | --- | --- |
-| FastAPI controller at `127.0.0.1:8040` | Serves the prompt UI, handles Google sign-in, manages the active workspace and saved apps, and reports job progress to the browser. |
+| FastAPI controller at the configured host, default `127.0.0.1:8040` | Serves the prompt UI, handles Google sign-in, manages the active workspace and saved apps, and reports job progress to the browser. |
 | Plan → OpenAI → Aider | The planner sends your prompt and app context to OpenAI, turns the response into a task list, and queues it. An in-process worker runs Aider against the React source one task at a time. The browser polls for task status, logs, and reported costs. |
 | Generate → Aider → Anthropic | Runs a direct edit without the planning queue. Aider receives your prompt and relevant JavaScript and JSX files. |
-| React and Vite at `127.0.0.1:5773` | Serves the current app in an iframe inside the controller. Vite watches the files and updates the preview when they change. |
+| React and Vite at the configured host, default `127.0.0.1:5773` | Serves the current app in an iframe inside the controller. Vite watches the files and updates the preview when they change. |
 | Local filesystem | The active app lives in `generated-app/`. Saved snapshots live in `saved-apps/`, which Git ignores because they belong to each local workspace. Copy that folder separately to back up or move your saved apps. The queue lives in controller memory, so restarting it clears job status. |
 
 Each clone has one active workspace. Browser tabs connected to the same controller see the same app and job queue. The controller runs its own queue worker, so you can use the app without starting the separate CLI utilities in `worker/`.
 
 ## Model providers
 
-**Plan** defaults to OpenAI for both planning and edits. **Generate** defaults to Anthropic for direct edits. You can use **Plan** with just an OpenAI key. Setting `OLLAMA_MODEL` switches both paths to Ollama.
+**Plan** defaults to OpenAI for both planning and edits. **Generate** defaults to Anthropic for direct edits. You can use **Plan** with just an OpenAI key.
 
-Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI, Anthropic, and Ollama. [Aider provider documentation](https://aider.chat/docs/llms.html)
-
-## Run with Ollama
-
-Install Ollama, start it locally, and download a model with `ollama pull qwen2.5:7b` or choose a model already listed by `ollama list`. After running `./setup.sh`, add these settings to `controller/.env`:
-
-```dotenv
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_API_BASE=http://127.0.0.1:11434
-VOICE_DEVELOPER_LOCAL_AUTH=1
-```
-
-Run `./start.sh` and open the controller at `http://127.0.0.1:8040`. Both buttons use the downloaded model, so neither needs a paid model API key. Local sign-in mode is for the browser on the host computer. For phone access, omit `VOICE_DEVELOPER_LOCAL_AUTH` and configure Google sign-in and network access while keeping the Ollama settings.
+Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI and Anthropic. [Aider provider documentation](https://aider.chat/docs/llms.html)
 
 ## Data and local execution
 
-The selected model receives your prompt and relevant source code. When you use a downloaded Ollama model, inference runs on your computer. How dictation audio is handled depends on your device and keyboard settings. Keep credentials and private data out of prompts and generated source.
+The selected model receives your prompt and relevant source code. How dictation audio is handled depends on your device and keyboard settings. Keep credentials and private data out of prompts and generated source.
 
 Aider edits files under `generated-app/src/` and can create Git commits. **New App** and **Load App** replace the active source, so save changes you want to keep. Setup and some workspace actions run `npm install`, which can execute dependency scripts under your user account. Review generated changes and dependencies before reusing or distributing an app.
-
-## TODO
-
-- [ ] Try local code generation with [Aider and Ollama](https://aider.chat/docs/llms/ollama.html). Try the same trivia-game prompts with the local model and the current Anthropic model. Start from the same app snapshot for each run. Record whether the preview builds, whether the requested changes work, how long each edit takes, and how many follow-up prompts it needs. Record the local model tag and hardware so others can repeat the experiment.
 
 ## License
 
