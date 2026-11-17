@@ -53,7 +53,9 @@ def _discover_openai() -> dict:
     if not os.environ.get("OPENAI_API_KEY", "").strip():
         return _entry("openai", error="OPENAI_API_KEY is not set")
     candidates = os.environ.get("OPENAI_MODELS", "").split(",") + [
-        os.environ.get(var, "") for var in ("OPENAI_MODEL", "PLANNER_MODEL", "CODER_MODEL")
+        os.environ.get("OPENAI_MODEL", "").strip() or "gpt-5.4-mini",
+        os.environ.get("PLANNER_MODEL", ""),
+        os.environ.get("CODER_MODEL", ""),
     ]
     ids = list(dict.fromkeys(c.strip() for c in candidates if c.strip()))
     return _entry("openai", models=[_model(i, True) for i in ids])

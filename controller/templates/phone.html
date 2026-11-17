@@ -22,8 +22,22 @@
     #logToggle { background: none; border: none; color: #71717a; cursor: pointer; font-size: 12px; padding: 4px 8px; text-align: left; }
     #log { display: none; }
     #helpBtn { flex: none; width: 32px; padding: 8px; background: #3f3f46; color: #fff; }
-    #helpModal, #logModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 1001; align-items: center; justify-content: center; }
-    #helpModal.open, #logModal.open { display: flex; }
+    #configBtn { flex: none; width: 32px; padding: 8px; background: #3f3f46; color: #fff; }
+    #helpModal, #logModal, #configModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 1001; align-items: center; justify-content: center; }
+    #helpModal.open, #logModal.open, #configModal.open { display: flex; }
+    #configModal .infoBox { max-height: 85vh; overflow-y: auto; }
+    #configModal fieldset { border: 1px solid #3f3f46; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    #configModal legend { font-size: 13px; color: #fff; padding: 0 6px; }
+    #configModal label { display: block; font-size: 12px; color: #a1a1aa; margin: 6px 0 2px; }
+    #configModal select { width: 100%; min-height: 44px; font-size: 16px; background: #27272a; color: #fff; border: 1px solid #3f3f46; border-radius: 8px; padding: 6px; }
+    .cfgTag { font-size: 11px; color: #a1a1aa; margin-top: 4px; }
+    .cfgErr { font-size: 12px; color: #f87171; margin-top: 4px; }
+    #configMsg { font-size: 12px; min-height: 16px; margin-bottom: 6px; }
+    #configMsg.err { color: #f87171; }
+    #configMsg.ok { color: #4ade80; }
+    #configMsg.note { color: #fbbf24; }
+    #configButtons { display: flex; gap: 8px; flex-wrap: wrap; }
+    #configButtons button { flex: 1; min-height: 44px; }
     .infoBox { background: #18181b; border: 1px solid #3f3f46; border-radius: 12px; width: 90%; max-width: 480px; max-height: 85vh; overflow-y: auto; padding: 20px; color: #d4d4d8; }
     .infoBox h2 { color: #fff; font-size: 17px; margin-bottom: 12px; }
     .infoBox p { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
@@ -87,6 +101,7 @@
       <button id="btn" title="Resume the latest stored plan from its next pending or failed task. Where it runs is set by PLANNER_*/CODER_* in controller/.env." onclick="continuePlan()">Continue plan</button>
       <button id="currentPlanBtn" title="View the plan currently running on the server." onclick="showActivePlan()" style="background:#3f3f46;display:none;">Current Plan</button>
       <button id="helpBtn" title="Learn what each controller action does." aria-label="Open controller help" aria-controls="helpModal" aria-haspopup="dialog" onclick="openHelpModal()">ⓘ</button>
+      <button id="configBtn" title="Choose the planner and coder models (local or cloud)." aria-label="Open model configuration" aria-controls="configModal" aria-haspopup="dialog" onclick="openConfigModal()">⚙</button>
     </div>
     <div id="status"></div>
     <div id="providerStatus">Planner provider: loading...</div>
@@ -117,11 +132,41 @@
       <h2 id="helpModalTitle">Using the controller</h2>
       <p>Describe your app in the prompt, then choose <strong>Plan</strong>. The generated app appears in the preview below.</p>
       <p><strong>Plan</strong> creates a plan and a task list. The tasks start automatically after 5 seconds. Click the button during the countdown to cancel, or close the plan window.</p>
-      <p><strong>Continue plan</strong> resumes the latest stored plan from its next pending or failed task. A failed task stops the run and only that task's changes are undone. Where the code runs (local or cloud, which model) is set by PLANNER_* and CODER_* in controller/.env, not by the button.</p>
+      <p><strong>Continue plan</strong> resumes the latest stored plan from its next pending or failed task. A failed task stops the run and only that task's changes are undone. Where the code runs (local or cloud, which model) is set in the ⚙ models panel, or by PLANNER_* and CODER_* in controller/.env when nothing is chosen there, not by the button.</p>
       <p><strong>Save App</strong> stores the current app. <strong>Load App</strong> restores a saved app.</p>
       <p><strong>New App</strong> clears the current app. Use <strong>⟳</strong> to reload the preview.</p>
       <p><strong>log</strong> opens the latest task error or output for troubleshooting.</p>
       <button id="helpCloseBtn" type="button" aria-label="Close controller help" onclick="closeHelpModal()">Close</button>
+    </div>
+  </div>
+
+  <div id="configModal" role="dialog" aria-modal="true" aria-labelledby="configModalTitle" tabindex="-1" onclick="if(event.target===this)closeConfigModal()">
+    <div class="infoBox">
+      <h2 id="configModalTitle">Models</h2>
+      <div id="configMsg" role="status" aria-live="polite"></div>
+      <fieldset>
+        <legend>Planner</legend>
+        <label for="cfg-planner-provider">Provider</label>
+        <select id="cfg-planner-provider" onchange="configProviderChanged('planner')"></select>
+        <label for="cfg-planner-model">Model</label>
+        <select id="cfg-planner-model" onchange="configUpdateSave()"></select>
+        <div class="cfgTag" id="cfg-planner-tag"></div>
+        <div class="cfgErr" id="cfg-planner-err"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Coder</legend>
+        <label for="cfg-coder-provider">Provider</label>
+        <select id="cfg-coder-provider" onchange="configProviderChanged('coder')"></select>
+        <label for="cfg-coder-model">Model</label>
+        <select id="cfg-coder-model" onchange="configUpdateSave()"></select>
+        <div class="cfgTag" id="cfg-coder-tag"></div>
+        <div class="cfgErr" id="cfg-coder-err"></div>
+      </fieldset>
+      <div id="configButtons">
+        <button id="configSaveBtn" type="button" onclick="saveModelConfig()">Save</button>
+        <button id="configEnvBtn" type="button" onclick="resetModelConfig()">Use .env</button>
+        <button id="configCloseBtn" type="button" aria-label="Close model configuration" onclick="closeConfigModal()">Close</button>
+      </div>
     </div>
   </div>
 
@@ -205,7 +250,7 @@
     function showPlannerConfigurationError() {
       document.getElementById('providerStatus').textContent = 'Planner/coder configuration error — check provider settings';
     }
-    (async function loadPlannerProvider() {
+    async function loadPlannerProvider() {
       try {
         const res = await fetch('/planner-provider');
         const data = await res.json();
@@ -217,7 +262,8 @@
       } catch (e) {
         document.getElementById('providerStatus').textContent = 'Planner/coder unavailable — controller could not report providers';
       }
-    })();
+    }
+    loadPlannerProvider();
 
     let isExecuting = false;
     let pollTimer = null;
@@ -495,6 +541,155 @@
       helpModalTrigger = null;
     }
 
+    let configModalTrigger = null;
+    let configData = null;
+    const CONFIG_ROLES = ['planner', 'coder'];
+    const CONFIG_PROVIDER_LABELS = { lmstudio: 'LM Studio (local)', ollama: 'Ollama (local)', openai: 'OpenAI (cloud)' };
+
+    function configMessage(text, kind) {
+      const el = document.getElementById('configMsg');
+      el.textContent = text || '';
+      el.className = kind || '';
+    }
+
+    function configProviderInfo(name) {
+      return ((configData && configData.providers) || []).find(p => p.name === name);
+    }
+
+    function configFillModels(role, selectedModel) {
+      const info = configProviderInfo(document.getElementById(`cfg-${role}-provider`).value);
+      const select = document.getElementById(`cfg-${role}-model`);
+      select.textContent = '';
+      const models = (info && info.available && info.models) || [];
+      const local = document.createElement('optgroup');
+      local.label = 'Local';
+      const cloud = document.createElement('optgroup');
+      cloud.label = info && info.name === 'openai' ? 'Cloud' : 'Cloud via Ollama';
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.location === 'cloud' ? `☁ ${m.label || m.id}` : (m.label || m.id);
+        (m.location === 'cloud' ? cloud : local).appendChild(opt);
+      });
+      if (local.children.length) select.appendChild(local);
+      if (cloud.children.length) select.appendChild(cloud);
+      if (selectedModel && models.some(m => m.id === selectedModel)) select.value = selectedModel;
+      const err = document.getElementById(`cfg-${role}-err`);
+      err.textContent = info ? (info.available ? '' : (info.error || 'Not available')) : '';
+    }
+
+    function configUpdateSave() {
+      const ok = CONFIG_ROLES.every(role => {
+        const info = configProviderInfo(document.getElementById(`cfg-${role}-provider`).value);
+        return info && info.available && document.getElementById(`cfg-${role}-model`).value;
+      });
+      document.getElementById('configSaveBtn').disabled = !ok;
+    }
+
+    function configProviderChanged(role) {
+      configFillModels(role, null);
+      configUpdateSave();
+    }
+
+    function renderConfig() {
+      const data = configData;
+      if (!data) return;
+      CONFIG_ROLES.forEach(role => {
+        const providerSelect = document.getElementById(`cfg-${role}-provider`);
+        providerSelect.textContent = '';
+        (data.providers || []).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.name;
+          opt.textContent = CONFIG_PROVIDER_LABELS[p.name] || p.label || p.name;
+          providerSelect.appendChild(opt);
+        });
+        const current = data.roles && data.roles[role];
+        if (current) providerSelect.value = current.provider;
+        configFillModels(role, current && current.model);
+        const tag = document.getElementById(`cfg-${role}-tag`);
+        tag.textContent = current
+          ? `${current.location === 'cloud' ? 'Cloud' : 'Local'} · ${current.source === 'ui' ? 'chosen here' : 'from .env'}`
+          : '';
+      });
+      if (data.config_error) configMessage(data.config_error, 'err');
+      else if (data.busy) configMessage('A run is active. Changes apply from the next run.', 'note');
+      else configMessage('', '');
+      configUpdateSave();
+    }
+
+    async function loadModelConfig() {
+      try {
+        const res = await fetch('/model-config');
+        const data = await res.json();
+        if (!res.ok) {
+          configMessage(data.detail || 'Could not load model configuration', 'err');
+          return;
+        }
+        configData = data;
+        renderConfig();
+      } catch (e) {
+        configMessage('Could not load model configuration', 'err');
+      }
+    }
+
+    function openConfigModal() {
+      configModalTrigger = document.activeElement;
+      document.getElementById('configModal').classList.add('open');
+      configMessage('Loading...', '');
+      document.getElementById('configCloseBtn').focus();
+      loadModelConfig();
+    }
+
+    function closeConfigModal() {
+      document.getElementById('configModal').classList.remove('open');
+      if (configModalTrigger && document.contains(configModalTrigger)) configModalTrigger.focus();
+      configModalTrigger = null;
+    }
+
+    async function saveModelConfig() {
+      const body = {};
+      CONFIG_ROLES.forEach(role => {
+        body[role] = {
+          provider: document.getElementById(`cfg-${role}-provider`).value,
+          model: document.getElementById(`cfg-${role}-model`).value,
+        };
+      });
+      try {
+        const res = await fetch('/model-config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          configMessage(typeof data.detail === 'string' ? data.detail : 'Save failed', 'err');
+          return;
+        }
+        configData = data;
+        renderConfig();
+        if (!data.busy) configMessage('Saved.', 'ok');
+        loadPlannerProvider();
+      } catch (e) {
+        configMessage('Save failed: controller unreachable', 'err');
+      }
+    }
+
+    async function resetModelConfig() {
+      try {
+        const res = await fetch('/model-config', { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) {
+          configMessage(typeof data.detail === 'string' ? data.detail : 'Reset failed', 'err');
+          return;
+        }
+        await loadModelConfig();
+        configMessage('Using .env settings.', 'ok');
+        loadPlannerProvider();
+      } catch (e) {
+        configMessage('Reset failed: controller unreachable', 'err');
+      }
+    }
+
     function openLogModal() {
       logModalTrigger = document.activeElement;
       document.getElementById('logContent').textContent = document.getElementById('log').textContent || 'No log output yet.';
@@ -517,11 +712,13 @@
       const openModal = [
         document.getElementById('helpModal'),
         document.getElementById('logModal'),
+        document.getElementById('configModal'),
       ].find(modal => modal.classList.contains('open'));
       if (!openModal) return;
 
       if (event.key === 'Escape') {
         if (openModal.id === 'helpModal') closeHelpModal();
+        else if (openModal.id === 'configModal') closeConfigModal();
         else closeLogModal();
         return;
       }

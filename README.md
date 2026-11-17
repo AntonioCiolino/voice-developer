@@ -14,7 +14,7 @@ You need Git, Bash, Python 3.10 or newer, Node.js with npm, and a model provider
 
 - The planner and the coder (the queued Aider edits) are configured separately; see [Planner and coder models](#planner-and-coder-models). With no new settings, both use the provider selected by `PLANNER_PROVIDER`, as before.
 - A role set to `openai` requires `OPENAI_API_KEY`. A role set to `ollama` requires a running local Ollama server and a model; it does not require OpenAI credentials.
-- Where code runs (local or cloud, and which model) is decided only by `PLANNER_*` and `CODER_*` in `controller/.env`, never by which button you press.
+- Where code runs (local or cloud, and which model) is decided by the ⚙ models panel when you have chosen there, otherwise by `PLANNER_*` and `CODER_*` in `controller/.env`, never by which button you press.
 
 For Google sign-in, create a Google OAuth client of type **Web application**. The controller generates its callback from the URL used to open it, so every URL you use for sign-in must have an exact matching authorized redirect URI. Add the Google accounts allowed to use the app as test users when the consent screen is in testing mode.
 
@@ -164,7 +164,7 @@ Each clone has one active workspace. Browser tabs connected to the same controll
 - `config.py` (paths, `.env`), `state.py` (in-memory jobs and queue), `ui.py` with `templates/phone.html` (the phone page).
 
 ## Planner and coder models
-Plan uses two independently configured roles, set only in `controller/.env` (there is no UI setting):
+Plan uses two independently configured roles, set in `controller/.env` or chosen in the ⚙ models panel (see below):
 | Variable | Meaning | Default when unset |
 | --- | --- | --- |
 | `PLANNER_PROVIDER` | `openai`, `ollama`, or `lmstudio` for the planner | `openai` |
@@ -174,6 +174,15 @@ Plan uses two independently configured roles, set only in `controller/.env` (the
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_API_BASE` | Existing settings; shared by both roles | unchanged |
 | `LMSTUDIO_MODEL`, `LMSTUDIO_API_BASE` | LM Studio model identifier and local server URL; shared by both roles | no model; `http://127.0.0.1:1234` |
 Existing `.env` files that set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL` behave exactly as before. An empty value counts as unset. Both roles share one `OLLAMA_API_BASE`, which must be loopback (`localhost`, `127.0.0.1`, or `::1`), and one `OPENAI_API_KEY`.
+
+### Models panel (hot swap)
+
+The ⚙ button next to ⓘ opens a panel with a provider and model dropdown for the planner and for the coder. Providers are LM Studio (local), Ollama (local) and OpenAI (cloud). Local models are listed live from the running servers; OpenAI models come from `OPENAI_MODELS` (comma list) plus `OPENAI_MODEL`, `PLANNER_MODEL` and `CODER_MODEL` in `.env`. Ollama models ending in `:cloud` or `-cloud` stay on the Ollama provider but are labeled cloud, and the "Local-only" badge turns off when a role uses one.
+
+- Precedence per role: panel choice, then `.env`, then defaults. With nothing chosen, behavior is exactly the `.env` behavior.
+- **Save** writes only `{provider, model}` per role to `controller/model-selection.json` (ignored by Git), so the choice survives a restart. **Use .env** deletes that file.
+- The planner applies from the next **Plan**. The coder is resolved when a run starts: a running plan finishes on the coder it started with, and the new coder applies from the next run (Continue or a new plan).
+- An unreachable server or a missing `OPENAI_API_KEY` is reported in the panel and the save is refused. Nothing falls back to another provider. API keys and server URLs are never shown or editable in the panel; they stay in `.env`.
 
 Bad configuration fails with a clear message and never falls back from a local role to a cloud one: an invalid provider name, `openai` without `OPENAI_API_KEY`, `ollama` without a model, or a non-loopback `OLLAMA_API_BASE`. A bad coder setting also fails **Plan** up front, so you never get a plan that cannot run.
 
