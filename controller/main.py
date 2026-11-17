@@ -1,5 +1,7 @@
 import asyncio
 import ipaddress
+import json
+import logging
 import os
 import pathlib
 import re
@@ -21,8 +23,11 @@ from pydantic import BaseModel
 load_dotenv(pathlib.Path(__file__).with_name(".env"))
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
-APP_SRC = REPO_ROOT / "generated-app" / "src"
+APP_ROOT = REPO_ROOT / "generated-app"
+APP_SRC = APP_ROOT / "src"
 SAVED_APPS = REPO_ROOT / "saved-apps"
+PLANS_DIR = REPO_ROOT / "plans"
+logger = logging.getLogger("voice-developer")
 
 # Auth config
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -66,10 +71,6 @@ def get_session_name(request: Request) -> str:
 jobs: dict = {}
 job_queue: asyncio.Queue = None
 active_job_id: str | None = None
-
-
-class GenerateRequest(BaseModel):
-    prompt: str
 
 
 class SaveRequest(BaseModel):
@@ -256,12 +257,89 @@ def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | N
             environment[variable] = source[variable]
     environment["OPENAI_API_KEY"] = provider.api_key
     return environment
-def build_aider_command(provider: PlannerProvider, task_prompt: str, files: list[str]) -> list[str]:
+class CoderEngineNotImplemented(RuntimeError):
+    """Raised when the selected coder engine is only a stub."""
+
+
+OPENCODE_NOT_IMPLEMENTED = (
+    "OpenCode coder engine is not implemented yet. Set CODER_ENGINE=aider or unset it."
+)
+_CODER_ENGINES = ("aider", "opencode")
+_EDIT_FORMATS = ("diff", "diff-fenced", "udiff", "whole")
+DEFAULT_CODER_TIMEOUT_SECONDS = 120
+PLAN_CONTEXT_LIMIT = 4000
+LOG_TAIL_LIMIT = 4000
+
+
+def resolve_coder_engine(env: dict[str, str] | None = None) -> str:
+    """CODER_ENGINE (.env only): 'aider' (default) or 'opencode'. Unknown values raise."""
+    values = os.environ if env is None else env
+    engine = values.get("CODER_ENGINE", "").strip().lower() or "aider"
+    if engine not in _CODER_ENGINES:
+        raise PlannerConfigurationError("CODER_ENGINE must be either 'aider' or 'opencode'")
+    return engine
+
+
+def resolve_coder_timeout(env: dict[str, str] | None = None) -> int:
+    """CODER_TIMEOUT_SECONDS: per-task subprocess timeout, a positive integer (default 120)."""
+    values = os.environ if env is None else env
+    raw = values.get("CODER_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_CODER_TIMEOUT_SECONDS
+    try:
+        seconds = int(raw)
+    except ValueError:
+        seconds = 0
+    if seconds <= 0:
+        raise PlannerConfigurationError("CODER_TIMEOUT_SECONDS must be a positive integer")
+    return seconds
+
+
+def resolve_coder_edit_format(env: dict[str, str] | None = None) -> str:
+    """CODER_EDIT_FORMAT: Aider edit format (default 'diff')."""
+    values = os.environ if env is None else env
+    edit_format = values.get("CODER_EDIT_FORMAT", "").strip().lower() or "diff"
+    if edit_format not in _EDIT_FORMATS:
+        raise PlannerConfigurationError(
+            "CODER_EDIT_FORMAT must be one of: " + ", ".join(_EDIT_FORMATS)
+        )
+    return edit_format
+
+
+def build_aider_command(
+    provider: PlannerProvider, task_prompt: str, files: list[str], edit_format: str = "diff"
+) -> list[str]:
     """Build the queued Aider invocation for the selected provider."""
     return [
         "aider", "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
-        "--model", provider.aider_model, "--message", task_prompt, *files,
+        "--model", provider.aider_model, "--edit-format", edit_format,
+        "--message", task_prompt, *files,
     ]
+
+
+def build_opencode_command(provider: PlannerProvider, task_prompt: str) -> list[str]:
+    """OpenCode integration point (stub: the command is defined but never executed).
+
+    Future implementer notes:
+    - Ollama must be registered as an OpenAI-compatible provider pointing at
+      "<OLLAMA_API_BASE>/v1" in the opencode config, with a context window of 64k or more.
+    - Run it with provider_environment(provider) so credentials stay isolated per role.
+    - Parse the `--format json` event stream for the task log and error text.
+    """
+    return ["opencode", "run", "--model", f"{provider.name}/{provider.model}",
+            "--format", "json", task_prompt]
+
+
+def build_coder_command(
+    engine: str, provider: PlannerProvider, task_prompt: str, files: list[str],
+    edit_format: str = "diff",
+) -> list[str]:
+    """Dispatch to the configured coder engine. OpenCode is a stub and never falls back."""
+    if engine == "aider":
+        return build_aider_command(provider, task_prompt, files, edit_format)
+    if engine == "opencode":
+        raise CoderEngineNotImplemented(OPENCODE_NOT_IMPLEMENTED)
+    raise PlannerConfigurationError("CODER_ENGINE must be either 'aider' or 'opencode'")
 
 
 def extract_cost(log: str) -> str:
@@ -269,99 +347,314 @@ def extract_cost(log: str) -> str:
     return m.group(1) if m else ''
 
 
+# ---- Plan parsing -------------------------------------------------------
+
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+_TASKS_HEADING_RE = re.compile(r"^\s*#{1,6}\s*(\d+[.)]\s*)?tasks?\s*:?\s*$", re.IGNORECASE)
+_TASK_LINE_RE = re.compile(r"^\s*\d+[.)]\s+(.+)$")
+
+
+def parse_tasks(plan_text: str) -> list[str]:
+    """Extract the clean task list: only the Tasks section, outside code fences, deduplicated."""
+    lines = (plan_text or "").splitlines()
+
+    def numbered(section: list[str]) -> list[str]:
+        found, in_fence = [], False
+        for line in section:
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            match = _TASK_LINE_RE.match(line)
+            if match:
+                text = match.group(1).strip()
+                if text and text not in found:
+                    found.append(text)
+        return found
+
+    def until_heading(section: list[str]) -> list[str]:
+        out, in_fence = [], False
+        for line in section:
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+            elif not in_fence and _HEADING_RE.match(line):
+                break
+            out.append(line)
+        return out
+
+    for idx, line in enumerate(lines):
+        if _TASKS_HEADING_RE.match(line):
+            return numbered(until_heading(lines[idx + 1:]))
+    return numbered(until_heading(lines))
+
+
+# ---- Plan persistence ---------------------------------------------------
+
+_PLAN_FILE_RE = re.compile(r"^[0-9a-f-]{36}\.json$")
+
+
+def save_job(job_id: str) -> None:
+    """Atomically write the job record to PLANS_DIR/<job_id>.json."""
+    job = jobs[job_id]
+    job["id"] = job_id
+    job["updated_at"] = datetime.now().isoformat()
+    PLANS_DIR.mkdir(parents=True, exist_ok=True)
+    target = PLANS_DIR / f"{job_id}.json"
+    tmp = PLANS_DIR / f".{job_id}.json.tmp"
+    tmp.write_text(json.dumps(job, indent=2))
+    os.replace(tmp, target)
+
+
+def load_jobs() -> None:
+    """Load stored plans into `jobs`. Jobs interrupted by a restart are made resumable."""
+    if not PLANS_DIR.exists():
+        return
+    for path in sorted(PLANS_DIR.iterdir()):
+        if not _PLAN_FILE_RE.match(path.name):
+            continue
+        try:
+            job = json.loads(path.read_text())
+            if not isinstance(job, dict) or not isinstance(job.get("tasks"), list):
+                raise ValueError("not a plan record")
+        except Exception as exc:
+            logger.warning("Skipping unreadable plan file %s: %s", path.name, exc)
+            continue
+        job_id = path.stem
+        changed = False
+        if job.get("status") == "running":
+            running = [i for i, s in enumerate(job.get("task_statuses", [])) if s == "running"]
+            for i in running:
+                job["task_statuses"][i] = "failed"
+            which = f"task {running[0] + 1}" if running else "a task"
+            job["status"] = "failed"
+            job["error"] = f"Controller restarted while {which} was running"
+            if running:
+                errors = job.setdefault("task_errors", [""] * len(job["tasks"]))
+                errors[running[0]] = job["error"]
+            changed = True
+        elif job.get("status") == "queued":
+            job["status"] = "planned"
+            changed = True
+        jobs[job_id] = job
+        if changed:
+            try:
+                save_job(job_id)
+            except OSError as exc:
+                logger.warning("Could not rewrite plan file %s: %s", path.name, exc)
+
+
+# ---- Per-task snapshot and revert --------------------------------------
+
+_BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2',
+                '.ttf', '.eot', '.map', '.lock'}
+
+
+def task_scope_files() -> list[pathlib.Path]:
+    """The exact files handed to the coder: non-binary src/ files plus top-level config files."""
+    files = [f for f in sorted(APP_SRC.rglob("*")) if f.is_file() and f.suffix not in _BINARY_EXTS]
+    for extra in ["vite.config.js", "index.html", "package.json"]:
+        p = APP_ROOT / extra
+        if p.exists():
+            files.append(p)
+    return files
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=str(APP_ROOT), capture_output=True, text=True)
+
+
+def snapshot_task_scope() -> dict:
+    """Capture file contents and the app repo HEAD before a task runs."""
+    head = None
+    if (APP_ROOT / ".git").exists():
+        result = _git("rev-parse", "HEAD")
+        if result.returncode == 0:
+            head = result.stdout.strip() or None
+    return {
+        "files": {f.relative_to(APP_ROOT).as_posix(): f.read_bytes() for f in task_scope_files()},
+        "src_files": {f.relative_to(APP_ROOT).as_posix() for f in APP_SRC.rglob("*") if f.is_file()},
+        "head": head,
+    }
+
+
+def revert_task(snapshot: dict) -> str:
+    """Undo one task's changes: only snapshotted files and new src/ files, never the whole app."""
+    notes = []
+    old_head = snapshot.get("head")
+    if old_head:
+        current = _git("rev-parse", "HEAD")
+        new_head = current.stdout.strip() if current.returncode == 0 else ""
+        if new_head and new_head != old_head and _git("merge-base", "--is-ancestor", old_head, new_head).returncode == 0:
+            if _git("reset", "--mixed", old_head).returncode == 0:
+                notes.append("moved the app repo HEAD back to the previous step")
+    for f in list(APP_SRC.rglob("*")):
+        if f.is_file() and f.relative_to(APP_ROOT).as_posix() not in snapshot["src_files"]:
+            f.unlink()
+            notes.append(f"removed new file {f.relative_to(APP_ROOT).as_posix()}")
+    for rel, data in snapshot["files"].items():
+        path = APP_ROOT / rel
+        if not path.exists() or path.read_bytes() != data:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            notes.append(f"restored {rel}")
+    return "; ".join(notes)
+
+
+# ---- Job execution ------------------------------------------------------
+
+def _text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _tail(value, limit: int = LOG_TAIL_LIMIT) -> str:
+    return _text(value).strip()[-limit:]
+
+
+def build_task_prompt(job: dict, i: int) -> str:
+    completed = [
+        f"  - Task {j+1} (done): {job['tasks'][j]}"
+        for j in range(i) if job['task_statuses'][j] == 'done'
+    ]
+    plan_text = (job.get('plan') or '').strip()
+    if len(plan_text) > PLAN_CONTEXT_LIMIT:
+        plan_text = plan_text[:PLAN_CONTEXT_LIMIT] + "\n... (plan truncated)"
+    return (
+        f"Overall goal: {job['prompt']}\n\n"
+        + "Architecture: pure React + Vite SPA. No backend server, no express/fastapi, "
+        + "no public/ folder unless you create it. All logic goes in src/ JSX files. "
+        + "Tailwind CSS is loaded via CDN in index.html.\n\n"
+        + (f"Approved plan:\n{plan_text}\n\n" if plan_text else "")
+        + (f"Tasks already completed:\n" + "\n".join(completed) + "\n\n" if completed else "")
+        + f"Now implement Task {i+1}/{len(job['tasks'])}: {job['tasks'][i]}\n\n"
+        + "Do not ask clarifying questions. Do not request additional files. "
+        + "Make your best judgment and implement it directly in the files provided."
+    )
+
+
+def _fail_task(job_id: str, i: int, snapshot: dict | None, message: str) -> None:
+    job = jobs[job_id]
+    note = ""
+    if snapshot is not None:
+        try:
+            note = revert_task(snapshot)
+        except Exception as exc:  # keep the original failure visible
+            note = f"revert failed: {exc}"
+    job['task_statuses'][i] = 'failed'
+    job['status'] = 'failed'
+    job['error'] = message
+    job['task_errors'][i] = message
+    job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + (
+        "Reverted this task's changes" + (f" ({note})" if note else " (nothing to undo)")
+    )
+    save_job(job_id)
+
+
+async def run_job(job_id: str) -> None:
+    job = jobs[job_id]
+    n = len(job['tasks'])
+    job.setdefault('task_errors', [""] * n)
+    job['status'] = 'running'
+    job['error'] = None
+    try:
+        _, provider = resolve_roles()
+        engine = resolve_coder_engine()
+        timeout = resolve_coder_timeout()
+        edit_format = resolve_coder_edit_format()
+    except PlannerConfigurationError as exc:
+        job['status'] = 'failed'
+        job['error'] = str(exc)
+        save_job(job_id)
+        return
+    job['engine'] = engine
+    save_job(job_id)
+
+    for i in range(n):
+        if job['task_statuses'][i] == 'done':
+            continue
+        job['current_task'] = i
+        job['task_statuses'][i] = 'running'
+        job['task_errors'][i] = ""
+        save_job(job_id)
+        snapshot = None
+        try:
+            snapshot = snapshot_task_scope()
+            files = [str(f.relative_to(REPO_ROOT)) for f in task_scope_files()]
+            command = build_coder_command(engine, provider, build_task_prompt(job, i), files, edit_format)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, lambda cmd=command: subprocess.run(
+                cmd,
+                cwd=str(REPO_ROOT),
+                env=provider_environment(provider),
+                capture_output=True, text=True, timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            ))
+        except CoderEngineNotImplemented as exc:
+            _fail_task(job_id, i, snapshot, str(exc))
+            return
+        except subprocess.TimeoutExpired as exc:
+            message = f"Task {i+1} timed out after {timeout} s (CODER_TIMEOUT_SECONDS)."
+            partial = _tail(exc.stderr) or _tail(exc.stdout)
+            job['task_logs'][i] = _tail(exc.stdout)
+            if partial:
+                message += f"\nPartial output:\n{partial}"
+            _fail_task(job_id, i, snapshot, message)
+            return
+        except FileNotFoundError as exc:
+            missing = "aider not found — run: pip install aider-chat" if engine == "aider" else str(exc)
+            _fail_task(job_id, i, snapshot, missing)
+            return
+        except Exception as exc:
+            _fail_task(job_id, i, snapshot, f"Task {i+1} failed: {exc}")
+            return
+
+        job['task_logs'][i] = _tail(result.stdout)
+        job['task_costs'][i] = extract_cost(result.stdout)
+        if result.returncode != 0:
+            parts = [f"Task {i+1} failed (exit code {result.returncode})."]
+            if _tail(result.stderr):
+                parts.append("stderr:\n" + _tail(result.stderr))
+            if _tail(result.stdout):
+                parts.append("stdout:\n" + _tail(result.stdout))
+            _fail_task(job_id, i, snapshot, "\n".join(parts))
+            return
+        app_jsx = APP_SRC / "App.jsx"
+        if app_jsx.exists():
+            content = app_jsx.read_text(errors='ignore')
+            if len(content) < 100 or 'export default' not in content:
+                _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
+                return
+        job['task_statuses'][i] = 'done'
+        save_job(job_id)
+
+    job['status'] = 'done'
+    save_job(job_id)
+
+
 async def job_worker():
     global active_job_id
     while True:
         job_id = await job_queue.get()
         active_job_id = job_id
-        job = jobs[job_id]
-        job['status'] = 'running'
         try:
-            _, provider = resolve_roles()
-        except PlannerConfigurationError as exc:
-            job['status'] = 'failed'
-            job['error'] = str(exc)
+            await run_job(job_id)
+        except Exception as exc:  # never let one job kill the worker
+            logger.exception("Job %s crashed", job_id)
+            job = jobs.get(job_id)
+            if job:
+                job['status'] = 'failed'
+                job['error'] = str(exc)
+                try:
+                    save_job(job_id)
+                except OSError:
+                    pass
+        finally:
             active_job_id = None
             job_queue.task_done()
-            continue
-
-        for i, task_desc in enumerate(job['tasks']):
-            job['current_task'] = i
-            job['task_statuses'][i] = 'running'
-
-            gen_app = REPO_ROOT / "generated-app"
-            # Pass all non-binary src files so aider sees the full picture
-            binary_exts = {'.png','.jpg','.jpeg','.gif','.ico','.svg','.woff','.woff2','.ttf','.eot','.map','.lock'}
-            files = [
-                str(f.relative_to(REPO_ROOT))
-                for f in APP_SRC.rglob("*")
-                if f.is_file() and f.suffix not in binary_exts
-            ]
-            # Include top-level config files for full project context
-            for extra in ["vite.config.js", "index.html", "package.json"]:
-                p = gen_app / extra
-                if p.exists():
-                    files.append(str(p.relative_to(REPO_ROOT)))
-
-            # Build prompt with full context of what's been done so far
-            completed = [
-                f"  - Task {j+1} (done): {job['tasks'][j]}"
-                for j in range(i) if job['task_statuses'][j] == 'done'
-            ]
-            task_prompt = (
-                f"Overall goal: {job['prompt']}\n\n"
-                + "Architecture: pure React + Vite SPA. No backend server, no express/fastapi, "
-                + "no public/ folder unless you create it. All logic goes in src/ JSX files. "
-                + "Tailwind CSS is loaded via CDN in index.html.\n\n"
-                + (f"Tasks already completed:\n" + "\n".join(completed) + "\n\n" if completed else "")
-                + f"Now implement Task {i+1}/{len(job['tasks'])}: {task_desc}\n\n"
-                + "Do not ask clarifying questions. Do not request additional files. "
-                + "Make your best judgment and implement it directly in the files provided."
-            )
-
-            try:
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(None, lambda tp=task_prompt, fl=files: subprocess.run(
-                    build_aider_command(provider, tp, fl),
-                    cwd=str(REPO_ROOT),
-                    env=provider_environment(provider),
-                    capture_output=True, text=True, timeout=120,
-                    stdin=subprocess.DEVNULL,
-                ))
-                job['task_logs'][i] = result.stdout[-1000:]
-                job['task_costs'][i] = extract_cost(result.stdout)
-                if result.returncode == 0:
-                    # Validate App.jsx wasn't corrupted
-                    app_jsx = APP_SRC / "App.jsx"
-                    if app_jsx.exists():
-                        content = app_jsx.read_text(errors='ignore')
-                        if len(content) < 100 or 'export default' not in content:
-                            # Revert to last good commit
-                            subprocess.run(
-                                ["git", "checkout", "--", "."],
-                                cwd=str(REPO_ROOT / "generated-app"),
-                                capture_output=True,
-                            )
-                            job['task_statuses'][i] = 'failed'
-                            job['status'] = 'failed'
-                            job['error'] = f"Task {i+1} corrupted App.jsx — reverted to last good state"
-                            break
-                    job['task_statuses'][i] = 'done'
-                else:
-                    job['task_statuses'][i] = 'failed'
-                    job['status'] = 'failed'
-                    job['error'] = result.stderr[-500:]
-                    break
-            except Exception as e:
-                job['task_statuses'][i] = 'failed'
-                job['status'] = 'failed'
-                job['error'] = str(e)
-                break
-        else:
-            job['status'] = 'done'
-
-        active_job_id = None
-        job_queue.task_done()
 
 
 @asynccontextmanager
@@ -381,6 +674,7 @@ async def lifespan(app: FastAPI):
     if not LOCAL_AUTH and not re.fullmatch(r"[0-9a-fA-F]{64}", SESSION_SECRET):
         raise RuntimeError("Set SESSION_SECRET to a random value generated with secrets.token_hex(32).")
     APP_SRC.mkdir(parents=True, exist_ok=True)
+    load_jobs()
     job_queue = asyncio.Queue()
     worker = asyncio.create_task(job_worker())
     yield
@@ -507,15 +801,15 @@ PHONE_UI = """<!doctype html>
   <div id="panel">
     <textarea id="prompt" rows="3" placeholder="Describe the app you want..."></textarea>
     <div id="row">
-      <button id="planBtn" title="Create a step-by-step plan and run it in the background." onclick="plan()">Plan</button>
-      <button id="btn" title="Send the prompt directly to the app generator." onclick="generate()">Generate</button>
+      <button id="planBtn" title="Create a plan and task list. It starts automatically after 5 seconds unless you cancel." onclick="plan()">Plan</button>
+      <button id="btn" title="Resume the latest stored plan from its next pending or failed task. Where it runs is set by PLANNER_*/CODER_* in controller/.env." onclick="continuePlan()">Continue plan</button>
       <button id="currentPlanBtn" title="View the plan currently running on the server." onclick="showActivePlan()" style="background:#3f3f46;display:none;">Current Plan</button>
       <button id="helpBtn" title="Learn what each controller action does." aria-label="Open controller help" aria-controls="helpModal" aria-haspopup="dialog" onclick="openHelpModal()">ⓘ</button>
     </div>
     <div id="status"></div>
     <div id="providerStatus">Planner provider: loading...</div>
     <div id="processing"></div>
-    <button id="logToggle" title="Open the latest generator output in a larger window." aria-label="Open generator log" aria-controls="logModal" aria-haspopup="dialog" onclick="openLogModal()">▶ log</button>
+    <button id="logToggle" title="Open the latest task error or output in a larger window." aria-label="Open task log" aria-controls="logModal" aria-haspopup="dialog" onclick="openLogModal()">▶ log</button>
     <div id="log"></div>
     <div id="actions">
       <button id="saveBtn" title="Save the current generated app to the saved-apps list." onclick="openSaveModal()">Save App</button>
@@ -539,21 +833,21 @@ PHONE_UI = """<!doctype html>
   <div id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle" tabindex="-1" onclick="if(event.target===this)closeHelpModal()">
     <div class="infoBox">
       <h2 id="helpModalTitle">Using the controller</h2>
-      <p>Describe your app in the prompt, then choose <strong>Plan</strong> to review progress or <strong>Generate</strong> for a direct update. The generated app appears in the preview below.</p>
-      <p><strong>Plan</strong> breaks your request into tasks, shows progress, and runs them in the background.</p>
-      <p><strong>Generate</strong> sends your request directly to the generator for a quick update.</p>
+      <p>Describe your app in the prompt, then choose <strong>Plan</strong>. The generated app appears in the preview below.</p>
+      <p><strong>Plan</strong> creates a plan and a task list. The tasks start automatically after 5 seconds. Click the button during the countdown to cancel, or close the plan window.</p>
+      <p><strong>Continue plan</strong> resumes the latest stored plan from its next pending or failed task. A failed task stops the run and only that task's changes are undone. Where the code runs (local or cloud, which model) is set by PLANNER_* and CODER_* in controller/.env, not by the button.</p>
       <p><strong>Save App</strong> stores the current app. <strong>Load App</strong> restores a saved app.</p>
       <p><strong>New App</strong> clears the current app. Use <strong>⟳</strong> to reload the preview.</p>
-      <p><strong>log</strong> opens the latest generator output for troubleshooting.</p>
+      <p><strong>log</strong> opens the latest task error or output for troubleshooting.</p>
       <button id="helpCloseBtn" type="button" aria-label="Close controller help" onclick="closeHelpModal()">Close</button>
     </div>
   </div>
 
   <div id="logModal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle" tabindex="-1" onclick="if(event.target===this)closeLogModal()">
     <div class="infoBox">
-      <h2 id="logModalTitle">Generator log</h2>
+      <h2 id="logModalTitle">Task log</h2>
       <div id="logContent" aria-live="polite"></div>
-      <button id="logCloseBtn" type="button" aria-label="Close generator log" onclick="closeLogModal()">Close</button>
+      <button id="logCloseBtn" type="button" aria-label="Close task log" onclick="closeLogModal()">Close</button>
     </div>
   </div>
 
@@ -689,7 +983,75 @@ PHONE_UI = """<!doctype html>
       } catch(e) {}
     })();
 
+    const AUTO_START_SECONDS = 5;
+    let countdownTimer = null;
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function cancelCountdown(message) {
+      if (!countdownTimer) return false;
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+      const btn = document.getElementById('planBtn');
+      btn.textContent = 'Plan';
+      document.getElementById('closeBtn').textContent = 'Close';
+      clearProcessing();
+      if (message) {
+        const status = document.getElementById('status');
+        status.textContent = message;
+        status.className = '';
+      }
+      return true;
+    }
+
+    async function executePlan(jobId) {
+      const status = document.getElementById('status');
+      try {
+        const res = await fetch(`/job/${jobId}/execute`, { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
+          status.textContent = 'Executing tasks...';
+          status.className = '';
+          setExecuting(true);
+          setProcessing('Executing tasks...');
+          startPolling(jobId);
+        } else {
+          status.textContent = data.detail || 'Could not start the plan';
+          status.className = 'err';
+          clearProcessing();
+        }
+      } catch (e) {
+        status.textContent = 'Network error';
+        status.className = 'err';
+        clearProcessing();
+      }
+    }
+
+    function startCountdown(jobId) {
+      let left = AUTO_START_SECONDS;
+      const btn = document.getElementById('planBtn');
+      const show = () => {
+        btn.textContent = `Starting in ${left}s... click to cancel`;
+        document.getElementById('status').textContent = `Plan ready. Starting in ${left}s. Click Plan or close this window to cancel.`;
+      };
+      document.getElementById('closeBtn').textContent = 'Close (cancels auto-start)';
+      setProcessing('Plan ready. Starting soon...');
+      show();
+      countdownTimer = setInterval(() => {
+        left -= 1;
+        if (left > 0) { show(); return; }
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        btn.textContent = 'Plan';
+        executePlan(jobId);
+      }, 1000);
+    }
+
     async function plan() {
+      if (cancelCountdown('Auto-start cancelled. Press Continue plan to run this plan.')) return;
       const prompt = document.getElementById('prompt').value.trim();
       if (!prompt) return;
       setProcessing('Planning...');
@@ -706,15 +1068,17 @@ PHONE_UI = """<!doctype html>
         const data = await res.json();
         if (res.ok) {
           renderPlannerProvider(jobProvider(data));
-          localStorage.setItem('activeJobId', data.job_id);
           document.getElementById('fullPlanText').textContent = data.plan;
           renderTaskList(data.tasks || []);
           document.getElementById('planModal').style.display = 'flex';
-          document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
-          status.textContent = data.queue_position > 1 ? `Queued (#${data.queue_position})` : 'Executing tasks...';
-          setExecuting(true);
-          setProcessing('Executing tasks...');
-          startPolling(data.job_id);
+          if ((data.tasks || []).length > 0) {
+            localStorage.setItem('activeJobId', data.job_id);
+            startCountdown(data.job_id);
+          } else {
+            status.textContent = 'Plan has no tasks to run';
+            status.className = 'err';
+            clearProcessing();
+          }
         } else {
           status.textContent = data.detail || 'Planning failed';
           status.className = 'err';
@@ -732,7 +1096,7 @@ PHONE_UI = """<!doctype html>
         <div class="taskItem task-pending" id="task-${i}">
           <div class="taskHeader" onclick="toggleTaskLog(${i})">
             <span class="taskIcon" id="taskIcon-${i}">○</span>
-            <span class="taskLabel" id="taskLabel-${i}">${i+1}/${tasks.length} &nbsp;${task}</span>
+            <span class="taskLabel" id="taskLabel-${i}">${i+1}/${tasks.length} &nbsp;${escapeHtml(task)}</span>
             <span class="taskMeta" id="taskMeta-${i}"></span>
             <span class="taskChevron" id="taskChevron-${i}">▶</span>
           </div>
@@ -750,7 +1114,13 @@ PHONE_UI = """<!doctype html>
         const s = job.task_statuses[i];
         taskEl.className = `taskItem task-${s}`;
         document.getElementById(`taskIcon-${i}`).textContent = icons[s] || '○';
-        if (job.task_logs[i]) document.getElementById(`taskLog-${i}`).textContent = job.task_logs[i];
+        const taskError = (job.task_errors || [])[i];
+        const logText = [job.task_logs[i], taskError].filter(Boolean).join('\\n\\n');
+        if (logText) document.getElementById(`taskLog-${i}`).textContent = logText;
+        if (s === 'failed' && taskError) {
+          document.getElementById(`taskLog-${i}`).style.display = 'block';
+          document.getElementById(`taskChevron-${i}`).textContent = '▼';
+        }
         if (job.task_costs[i]) document.getElementById(`taskMeta-${i}`).textContent = job.task_costs[i];
       });
       const status = document.getElementById('status');
@@ -787,8 +1157,10 @@ PHONE_UI = """<!doctype html>
             setExecuting(false);
             localStorage.removeItem('activeJobId');
             document.getElementById('closeBtn').textContent = 'Close';
-            document.getElementById('status').textContent = 'Task failed';
+            const failure = job.error || 'Task failed';
+            document.getElementById('status').textContent = failure.slice(0, 300);
             document.getElementById('status').className = 'err';
+            document.getElementById('log').textContent = failure;
             clearProcessing();
           }
         } catch(e) { /* network blip, keep polling */ }
@@ -817,6 +1189,7 @@ PHONE_UI = """<!doctype html>
     }
 
     function closePlan() {
+      cancelCountdown('Auto-start cancelled. Press Continue plan to run this plan.');
       if (isExecuting) {
         if (!confirm('Tasks are still running on the server. Close this panel? Tasks will continue in the background.')) return;
       }
@@ -954,44 +1327,35 @@ PHONE_UI = """<!doctype html>
       }
     }
 
-    async function generate() {
-      const prompt = document.getElementById('prompt').value.trim();
-      if (!prompt) return;
-      const btn = document.getElementById('btn');
+    async function continuePlan() {
+      cancelCountdown();
       const status = document.getElementById('status');
-      const log = document.getElementById('log');
-      btn.disabled = true;
-      btn.textContent = 'Generating...';
-      status.textContent = '';
+      status.textContent = 'Continuing plan...';
       status.className = '';
-      log.textContent = '';
+      document.getElementById('log').textContent = '';
       try {
-        const res = await fetch('/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt })
-        });
+        const res = await fetch('/continue', { method: 'POST' });
         const data = await res.json();
         if (res.ok) {
-          status.textContent = 'Done — app updated';
-          status.className = 'ok';
-          document.getElementById('prompt').value = '';
-          if (data.log) {
-            log.textContent = data.log;
-          }
+          localStorage.setItem('activeJobId', data.job_id);
+          renderPlannerProvider(jobProvider(data));
+          document.getElementById('fullPlanText').textContent = data.plan || '';
+          renderTaskList(data.tasks);
+          updateTaskList(data);
+          document.getElementById('planModal').style.display = 'flex';
+          document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
+          status.textContent = 'Continuing plan...';
+          setExecuting(true);
+          setProcessing('Executing tasks...');
+          startPolling(data.job_id);
         } else {
-          status.textContent = data.detail || 'Error';
+          status.textContent = data.detail || 'Could not continue the plan';
           status.className = 'err';
-          if (data.log) {
-            log.textContent = data.log;
-          }
+          document.getElementById('log').textContent = data.detail || '';
         }
       } catch (e) {
         status.textContent = 'Network error';
         status.className = 'err';
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Generate';
       }
     }
 
@@ -1131,43 +1495,6 @@ def check_api():
     return {"has_api_key": bool(api_key)}
 
 
-@app.post("/generate")
-def generate(req: GenerateRequest):
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
-
-    files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
-    files += [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.js")
-              if not f.name.endswith(".min.js")]
-
-    try:
-        result = subprocess.run(
-            [
-                "aider",
-                "--yes-always",
-                "--no-pretty",
-                "--model", "claude-sonnet-4-6",
-                "--message", req.prompt,
-                *files,
-            ],
-            cwd=str(REPO_ROOT),
-            env={**os.environ, "ANTHROPIC_API_KEY": api_key},
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Aider timed out")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="aider not found — run: pip install aider-chat")
-
-    if result.returncode != 0:
-        raise HTTPException(status_code=502, detail=result.stderr[-2000:] or "Aider failed")
-
-    return {"status": "ok", "message": "App updated", "log": result.stdout[-2000:]}
-
-
 @app.post("/save")
 def save_app(req: SaveRequest):
     if not req.name or not req.name.strip():
@@ -1240,7 +1567,7 @@ def get_planner_provider():
 
 @app.post("/plan")
 async def plan(req: PlanRequest):
-    """Generate a plan and enqueue it as a background job."""
+    """Generate a plan and store it as a planned job. Execution starts separately."""
     try:
         provider, coder = resolve_roles()
     except PlannerConfigurationError as exc:
@@ -1264,27 +1591,26 @@ ARCHITECTURE CONSTRAINTS (never violate these):
 - All data must be hardcoded in JS/JSX or fetched from external public APIs
 - Tasks are executed by aider which reads the provided src/ files — keep tasks self-contained
 
-FOR SIMPLE REQUESTS (rename, small fix, minor change):
-Output only:
-## Tasks
-1) Task one
-2) Task two
+OUTPUT FORMAT (use only these sections, never repeat the plan or add other sections, no code):
 
-FOR COMPLEX REQUESTS (new feature, refactor, system redesign):
-Output full plan:
+FOR SIMPLE REQUESTS (rename, small fix, minor change), output only:
+## Tasks
+1) Task name
+2) Task name
+
+FOR COMPLEX REQUESTS (new feature, refactor, system redesign), output only:
 ## 1) Requirements
 ...
 ## 2) Architecture
 ...
 ## 3) Tasks
-1) Task one
-2) Task two
-...
+1) Task name
+2) Task name
 ## 4) Acceptance Criteria
 ...
 
-Tasks must use format: "1) Task name", "2) Task name", etc.
-Keep tasks concrete and self-contained. Never plan tasks that require files outside src/.""",
+List each task exactly once, in the Tasks section, as "1) Task name", "2) Task name", etc.
+Do not include code snippets or a second copy of the task list. Keep tasks concrete and self-contained. Never plan tasks that require files outside src/.""",
                 },
                 {"role": "user", "content": _planner_user_msg(req.prompt)},
             ],
@@ -1293,15 +1619,13 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
         )
 
         plan_text = response.choices[0].message.content
-        tasks = []
-        for line in plan_text.split("\n"):
-            match = re.match(r"^\s*\d+[\.\)]\s+(.+)$", line.strip())
-            if match:
-                tasks.append(match.group(1).strip())
+        tasks = parse_tasks(plan_text)
 
         job_id = str(uuid.uuid4())
         jobs[job_id] = {
-            "status": "queued",
+            "id": job_id,
+            "version": 1,
+            "status": "planned",
             "prompt": req.prompt,
             "plan": plan_text,
             "tasks": tasks,
@@ -1309,25 +1633,30 @@ Keep tasks concrete and self-contained. Never plan tasks that require files outs
             "task_statuses": ["pending"] * len(tasks),
             "task_logs": [""] * len(tasks),
             "task_costs": [""] * len(tasks),
+            "task_errors": [""] * len(tasks),
             "created_at": datetime.now().isoformat(),
             "error": None,
+            "engine": resolve_coder_engine(),
             "provider": planner_provider_info(provider),
             "roles": roles_info(provider, coder),
         }
-        await job_queue.put(job_id)
+        save_job(job_id)
 
         return {
-            "status": "ok",
+            "status": "planned",
             "job_id": job_id,
             "plan": plan_text,
             "tasks": tasks,
             "task_count": len(tasks),
-            "queue_position": job_queue.qsize(),
             "provider": planner_provider_info(provider),
             "roles": roles_info(provider, coder),
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")
+
+
+def _busy() -> bool:
+    return any(j.get('status') in ('queued', 'running') for j in jobs.values())
 
 
 @app.get("/job/active")
@@ -1336,7 +1665,7 @@ def get_active_job():
         return {**jobs[active_job_id], "job_id": active_job_id}
     # Also check for queued jobs
     for jid, job in jobs.items():
-        if job['status'] == 'queued':
+        if job['status'] in ('queued', 'running'):
             return {**job, "job_id": jid}
     return None
 
@@ -1345,7 +1674,64 @@ def get_active_job():
 def get_job(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    return jobs[job_id]
+    return {**jobs[job_id], "job_id": job_id}
+
+
+async def _enqueue_job(job_id: str) -> dict:
+    """Queue a planned or failed job. Failed tasks restart; done tasks stay done."""
+    job = jobs[job_id]
+    if _busy():
+        raise HTTPException(status_code=409, detail="A plan is already running")
+    if job['status'] not in ('planned', 'failed') or all(s == 'done' for s in job['task_statuses']):
+        raise HTTPException(status_code=409, detail=f"Plan is {job['status']} and cannot be started")
+    if not job['tasks']:
+        raise HTTPException(status_code=409, detail="This plan has no tasks to run")
+    try:
+        resolve_roles()
+        engine = resolve_coder_engine()
+        resolve_coder_timeout()
+        resolve_coder_edit_format()
+        if engine == "opencode":
+            raise CoderEngineNotImplemented(OPENCODE_NOT_IMPLEMENTED)
+    except CoderEngineNotImplemented as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
+    except PlannerConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    job.setdefault('task_errors', [""] * len(job['tasks']))
+    for i, status in enumerate(job['task_statuses']):
+        if status != 'done':
+            job['task_statuses'][i] = 'pending'
+            job['task_errors'][i] = ""
+    job['status'] = 'queued'
+    job['error'] = None
+    job['engine'] = engine
+    save_job(job_id)
+    await job_queue.put(job_id)
+    return {**job, "job_id": job_id}
+
+
+@app.post("/job/{job_id}/execute")
+async def execute_job(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return await _enqueue_job(job_id)
+
+
+@app.post("/continue")
+async def continue_plan():
+    """Resume the most recent stored plan from its next pending or failed task."""
+    if _busy():
+        raise HTTPException(status_code=409, detail="A plan is already running")
+    resumable = [
+        (j.get('created_at', ''), jid) for jid, j in jobs.items()
+        if j.get('status') in ('planned', 'failed')
+        and j.get('tasks') and any(s != 'done' for s in j['task_statuses'])
+    ]
+    if not resumable:
+        if any(j.get('tasks') for j in jobs.values()):
+            raise HTTPException(status_code=404, detail="The latest plan is already complete. Press Plan to create a new one.")
+        raise HTTPException(status_code=404, detail="No stored plan to continue. Press Plan to create one.")
+    return await _enqueue_job(max(resumable)[1])
 
 
 @app.get("/list-apps")

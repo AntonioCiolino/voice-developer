@@ -1,5 +1,7 @@
 import asyncio
 import os
+import pathlib
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -211,7 +213,7 @@ class PlannerProviderTests(unittest.TestCase):
         self.assertNotIn("cloud.example", str(raised.exception))
         self.assertIn("localhost", str(raised.exception))
 
-    def test_plan_response_and_queued_job_include_same_safe_provider(self):
+    def test_plan_response_and_planned_job_include_same_safe_provider(self):
         class FakeQueue:
             def __init__(self):
                 self.items = []
@@ -223,7 +225,7 @@ class PlannerProviderTests(unittest.TestCase):
                 return len(self.items)
 
         response = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="## Tasks\\n1) Keep it local"))]
+            choices=[SimpleNamespace(message=SimpleNamespace(content="## Tasks\n1) Keep it local"))]
         )
         fake_client = SimpleNamespace(
             chat=SimpleNamespace(
@@ -232,6 +234,8 @@ class PlannerProviderTests(unittest.TestCase):
         )
         queue = FakeQueue()
         existing_jobs = set(jobs)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
 
         with (
             patch.dict(os.environ, {
@@ -242,6 +246,7 @@ class PlannerProviderTests(unittest.TestCase):
             patch("controller.main.create_planner_client", return_value=fake_client),
             patch("controller.main._planner_user_msg", return_value="harmless prompt"),
             patch("controller.main.job_queue", queue),
+            patch("controller.main.PLANS_DIR", pathlib.Path(tmp.name)),
         ):
             result = asyncio.run(create_plan(PlanRequest(prompt="harmless prompt")))
 
@@ -254,6 +259,9 @@ class PlannerProviderTests(unittest.TestCase):
             })
             self.assertEqual(jobs[result["job_id"]]["provider"], result["provider"])
             self.assertNotIn("OPENAI_API_KEY", str(result))
+            self.assertEqual(result["status"], "planned")
+            self.assertEqual(result["tasks"], ["Keep it local"])
+            self.assertEqual(queue.items, [])
         finally:
             for job_id in set(jobs) - existing_jobs:
                 jobs.pop(job_id, None)

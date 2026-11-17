@@ -1,20 +1,20 @@
 # voice-developer
 
-Open Voice Developer on your phone, tap the microphone on your keyboard, and say what you want the app to do. For example, “Make a game where I guess whether Dwight or Jim said the quote.” Your phone’s built-in voice-to-text turns the command into text. Then tap **Plan** or **Generate** and watch the game update in the live preview. You can use the same workflow on any device that can reach your controller and supports dictation.
+Open Voice Developer on your phone, tap the microphone on your keyboard, and say what you want the app to do. For example, “Make a game where I guess whether Dwight or Jim said the quote.” Your phone’s built-in voice-to-text turns the command into text. Then tap **Plan** and watch the game update in the live preview. You can use the same workflow on any device that can reach your controller and supports dictation.
 
 We used it to make funny trivia games, including **Dwight or Jim?** and a nature-and-science edition of **Two Truths and a Lie**. We’d play a round, dictate a change with the game still open, and try the next version as soon as the preview updated.
 
-Voice Developer receives the text from your device’s dictation. It doesn’t call a paid transcription API. **Plan** and **Generate** still use your own model API keys to edit the app and may incur provider charges.
+Voice Developer receives the text from your device’s dictation. It doesn’t call a paid transcription API. **Plan** and **Continue plan** still use your own model API keys to edit the app and may incur provider charges.
 
 ## Setup
 
 ### Prerequisites
 
-You need Git, Bash, Python 3.10 or newer, Node.js with npm, and a model provider for the action you use. **Plan** uses OpenAI by default, or local Ollama when selected explicitly. **Generate** continues to use Anthropic for a direct edit:
+You need Git, Bash, Python 3.10 or newer, Node.js with npm, and a model provider for the action you use. **Plan** uses OpenAI by default, or local Ollama when selected explicitly. **Continue plan** runs whichever coder provider you configure; there is no separate cloud-only path:
 
 - The planner and the coder (the queued Aider edits) are configured separately; see [Planner and coder models](#planner-and-coder-models). With no new settings, both use the provider selected by `PLANNER_PROVIDER`, as before.
 - A role set to `openai` requires `OPENAI_API_KEY`. A role set to `ollama` requires a running local Ollama server and a model; it does not require OpenAI credentials.
-- `ANTHROPIC_API_KEY` is used by **Generate** and is unchanged by the planner provider setting.
+- Where code runs (local or cloud, and which model) is decided only by `PLANNER_*` and `CODER_*` in `controller/.env`, never by which button you press.
 
 For Google sign-in, create a Google OAuth client of type **Web application**. The controller generates its callback from the URL used to open it, so every URL you use for sign-in must have an exact matching authorized redirect URI. Add the Google accounts allowed to use the app as test users when the consent screen is in testing mode.
 
@@ -34,7 +34,6 @@ OPENAI_MODEL=gpt-5.4-mini
 OPENAI_API_KEY=your-openai-key
 OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_API_BASE=http://127.0.0.1:11434
-ANTHROPIC_API_KEY=your-anthropic-key
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 ALLOWED_EMAILS=you@example.com
@@ -59,7 +58,7 @@ The default local startup binds both services to loopback:
 ./start.sh
 ```
 
-Open the controller at [http://127.0.0.1:8040](http://127.0.0.1:8040). The controller embeds the Vite preview at [http://127.0.0.1:5773](http://127.0.0.1:5773). `start.sh` starts Vite and Uvicorn in the foreground and prints both URLs. Press **Ctrl+C** once to stop both processes, or run `./stop.sh` from another terminal in the repository. `stop.sh` reads the PID file created by `start.sh`, validates that each PID still belongs to this checkout, and does nothing if the app is not running. Start `./start.sh` again to restart the app. Restarting clears the in-memory job queue and status, but it does not remove `generated-app/` or saved snapshots.
+Open the controller at [http://127.0.0.1:8040](http://127.0.0.1:8040). The controller embeds the Vite preview at [http://127.0.0.1:5773](http://127.0.0.1:5773). `start.sh` starts Vite and Uvicorn in the foreground and prints both URLs. Press **Ctrl+C** once to stop both processes, or run `./stop.sh` from another terminal in the repository. `stop.sh` reads the PID file created by `start.sh`, validates that each PID still belongs to this checkout, and does nothing if the app is not running. Start `./start.sh` again to restart the app. Plans are stored in `plans/` and survive a restart: a plan that was running becomes failed and can be resumed with **Continue plan**, and nothing runs automatically after a restart. Restarting does not remove `generated-app/` or saved snapshots.
 
 The loopback OAuth callback is:
 
@@ -147,10 +146,10 @@ The authenticated `/status` endpoint is available at port `8040`, but the contro
 | Component | Role |
 | --- | --- |
 | FastAPI controller at the configured host, default `127.0.0.1:8040` | Serves the prompt UI, handles Google sign-in, manages the active workspace and saved apps, and reports job progress to the browser. |
-| Plan → planner model → coder model (Aider) | The planner sends your prompt and app context to the provider selected by `PLANNER_PROVIDER` and `PLANNER_MODEL`, turns the response into a task list, and queues it. The in-process worker runs Aider with the coder provider and model (`CODER_PROVIDER`, `CODER_MODEL`) against the React source one task at a time. Each role set to `ollama` uses the loopback Ollama endpoint with no cloud credentials in its environment and never falls back to a cloud provider. The coder defaults to the planner's provider and model settings. |
-| Generate → Aider → Anthropic | Runs a direct edit without the planning queue. Aider receives your prompt and relevant JavaScript and JSX files. This path still uses `ANTHROPIC_API_KEY` and is unaffected by `PLANNER_PROVIDER`. |
+| Plan → planner model → coder model (Aider) | The planner sends your prompt and app context to the provider selected by `PLANNER_PROVIDER` and `PLANNER_MODEL`, turns the response into a clean task list (only the `## Tasks` section, duplicates removed), and stores it as a plan. Nothing runs yet: the UI shows a 5 second countdown on the **Plan** button and then starts the plan. Click **Plan** or close the plan window during the countdown to cancel; the plan stays stored. The in-process worker runs Aider with the coder provider and model (`CODER_PROVIDER`, `CODER_MODEL`) against the React source one task at a time, with `--edit-format diff` by default and the approved plan included in each task prompt. A failed task stops the run, earlier tasks stay done, and only the failed task's changes are reverted (never the whole app). The UI shows the timeout message or the Aider stderr/stdout tail. Each role set to `ollama` uses the loopback Ollama endpoint with no cloud credentials in its environment and never falls back to a cloud provider. The coder defaults to the planner's provider and model settings. |
+| Continue plan | Resumes the most recent stored plan from its next pending or failed task, using the same coder settings as Plan. If no plan is stored it says so. |
 | React and Vite at the configured host, default `127.0.0.1:5773` | Serves the current app in an iframe inside the controller. Vite watches the files and updates the preview when they change. |
-| Local filesystem | The active app lives in `generated-app/`. Saved snapshots live in `saved-apps/`, which Git ignores because they belong to each local workspace. Copy that folder separately to back up or move your saved apps. The queue lives in controller memory, so restarting it clears job status. |
+| Local filesystem | The active app lives in `generated-app/`. Saved snapshots live in `saved-apps/`, which Git ignores because they belong to each local workspace. Copy that folder separately to back up or move your saved apps. Plans and their task status are saved as JSON in `plans/` (Git ignored) so they survive a controller restart. |
 
 Each clone has one active workspace. Browser tabs connected to the same controller see the same app and job queue. The controller runs its own queue worker, so you can use the app without starting the separate CLI utilities in `worker/`.
 
@@ -196,7 +195,7 @@ Example combinations:
   ```
 - **Legacy, unchanged.** Set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL`.
 
-Credential isolation per role: an `ollama` Aider process gets a small allowlist of environment variables plus `OLLAMA_API_BASE`. An `openai` Aider process gets the same allowlist plus `OPENAI_API_KEY`, optional `OPENAI_API_BASE`/`OPENAI_BASE_URL`/`OPENAI_ORG_ID`, and proxy and certificate variables. It no longer inherits unrelated secrets such as `ANTHROPIC_API_KEY`, `GOOGLE_CLIENT_SECRET`, or `SESSION_SECRET`. The controller badge shows planner and coder provider and model separately and shows `Local-only` only when both are `ollama`.
+Credential isolation per role: an `ollama` Aider process gets a small allowlist of environment variables plus `OLLAMA_API_BASE`. An `openai` Aider process gets the same allowlist plus `OPENAI_API_KEY`, optional `OPENAI_API_BASE`/`OPENAI_BASE_URL`/`OPENAI_ORG_ID`, and proxy and certificate variables. It does not inherit unrelated secrets such as `ANTHROPIC_API_KEY`, `GOOGLE_CLIENT_SECRET`, or `SESSION_SECRET`. The controller badge shows planner and coder provider and model separately and shows `Local-only` only when both are `ollama`.
 
 Local model caveats on an M2 Pro with 16 GB RAM:
 - Models of about 7-8B fit. `qwen3:14b` is likely to swap.
@@ -213,7 +212,13 @@ Restart the controller after editing `.env` (`./stop.sh`, then `./start.sh`).
 - `PLANNER_PROVIDER=openai` uses `OPENAI_MODEL` (default `gpt-5.4-mini`) for the planning request and the same OpenAI model for queued Aider edits. `OPENAI_API_KEY` is required.
 - `PLANNER_PROVIDER=ollama` uses `OLLAMA_MODEL` and `OLLAMA_API_BASE` for both planning and queued Aider edits. The recommended local values are `qwen2.5:7b` and `http://127.0.0.1:11434`. Ollama mode is local-only: it requires the selected endpoint and model, never falls back to OpenAI or another cloud provider, and does not need `OPENAI_API_KEY` or `OPENAI_API_BASE`.
 
-`Generate` remains the separate Anthropic direct-edit path and continues to use `ANTHROPIC_API_KEY`; the planner and coder settings do not change it. Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.
+Optional coder settings in `controller/.env` (see `controller/.env.example`):
+
+- `CODER_TIMEOUT_SECONDS` is the per-task timeout, default `120`.
+- `CODER_EDIT_FORMAT` is the Aider edit format: `diff` (default), `diff-fenced`, `udiff`, or `whole`.
+- `CODER_ENGINE` is `aider` (default) or `opencode`. OpenCode is a stub that defines the command (`opencode run --model <provider/model> --format json`, Ollama through an OpenAI-compatible `/v1` endpoint with a 64k+ context). Selecting it fails with "not implemented yet"; it never falls back to Aider or a cloud provider.
+
+Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.
 
 The local `qwen2.5:7b` model has no cloud credentials to configure, but a 7B model may produce less consistent plans or edits than a larger model. Its speed and context capacity also depend on local hardware and the model's Ollama installation. Pull and test the model before selecting it for regular edits.
 
@@ -261,7 +266,7 @@ PY
 
 Expected provider evidence includes `label: 'Ollama / local-only'` and `endpoint: 'http://127.0.0.1:11434/v1'`. This proves the application selected and used the validated loopback endpoint for this planner request. It does not prove that unrelated operating-system processes made no network connections, and it does not change or enforce firewall or router policy. To inspect the planner process during the request when practical, use `lsof -nP -a -p <planner-pid> -iTCP -sTCP:ESTABLISHED`.
 
-Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI and Anthropic in addition to the explicit Ollama planner path. [Aider provider documentation](https://aider.chat/docs/llms.html)
+Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI and the explicit Ollama path. [Aider provider documentation](https://aider.chat/docs/llms.html)
 
 ## Data and local execution
 
