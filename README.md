@@ -10,10 +10,11 @@ Voice Developer receives the text from your device’s dictation. It doesn’t c
 
 ### Prerequisites
 
-You need Git, Bash, Python 3.10 or newer, Node.js with npm, and model-provider credentials. The controller also needs an Aider-compatible model for the action you use:
+You need Git, Bash, Python 3.10 or newer, Node.js with npm, and a model provider for the action you use. **Plan** uses OpenAI by default, or local Ollama when selected explicitly. **Generate** continues to use Anthropic for a direct edit:
 
-- `OPENAI_API_KEY` is used by **Plan** to create the task list and by the queued worker to apply the tasks.
-- `ANTHROPIC_API_KEY` is used by **Generate** for a direct edit.
+- OpenAI mode requires `OPENAI_API_KEY` and uses `OPENAI_MODEL` for planning and the queued Aider edits.
+- Ollama mode requires a running local Ollama server and the model named by `OLLAMA_MODEL`; it does not require OpenAI credentials.
+- `ANTHROPIC_API_KEY` is used by **Generate** and is unchanged by the planner provider setting.
 
 For Google sign-in, create a Google OAuth client of type **Web application**. The controller generates its callback from the URL used to open it, so every URL you use for sign-in must have an exact matching authorized redirect URI. Add the Google accounts allowed to use the app as test users when the consent screen is in testing mode.
 
@@ -25,16 +26,22 @@ From the repository root, run setup once:
 
 `setup.sh` creates `controller/venv`, installs `controller/requirements.txt`, runs `npm install` in `generated-app`, and copies `controller/.env.example` to `controller/.env` only when that file does not already exist. It does not make model API calls. Fill in `controller/.env` before starting the app. Keep that file private; it is ignored by Git.
 
-Set these values in `controller/.env` for Google sign-in:
+Set these values in `controller/.env` for the default OpenAI planner and Google sign-in:
 
 ```dotenv
+PLANNER_PROVIDER=openai
+OPENAI_MODEL=gpt-5.4-mini
 OPENAI_API_KEY=your-openai-key
+OLLAMA_MODEL=qwen2.5:7b
+OLLAMA_API_BASE=http://127.0.0.1:11434
 ANTHROPIC_API_KEY=your-anthropic-key
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 ALLOWED_EMAILS=you@example.com
 SESSION_SECRET=generated-64-hex-character-value
 ```
+
+To use only the local planner, change `PLANNER_PROVIDER` to `ollama`, keep `OLLAMA_MODEL` and `OLLAMA_API_BASE` set to the local server, and remove or leave unset `OPENAI_API_KEY` and `OPENAI_API_BASE`. Ollama mode does not fall back to OpenAI or another cloud provider if the local endpoint or model is unavailable. `qwen2.5:7b` must already be installed in Ollama. It needs no cloud credential, but its smaller size can make task decomposition and code edits less reliable than a larger hosted model, and local generation can be slower or limited by the Mac's available memory. The planner remains planning-only until the queued Aider worker applies its tasks, so use a planning prompt for a local smoke check.
 
 `ALLOWED_EMAILS` is a comma-separated allowlist. The controller accepts only a verified Google email in that list. Generate `SESSION_SECRET` with:
 
@@ -140,8 +147,8 @@ The authenticated `/status` endpoint is available at port `8040`, but the contro
 | Component | Role |
 | --- | --- |
 | FastAPI controller at the configured host, default `127.0.0.1:8040` | Serves the prompt UI, handles Google sign-in, manages the active workspace and saved apps, and reports job progress to the browser. |
-| Plan → OpenAI → Aider | The planner sends your prompt and app context to OpenAI, turns the response into a task list, and queues it. An in-process worker runs Aider against the React source one task at a time. The browser polls for task status, logs, and reported costs. |
-| Generate → Aider → Anthropic | Runs a direct edit without the planning queue. Aider receives your prompt and relevant JavaScript and JSX files. |
+| Plan → selected provider → Aider | The planner sends your prompt and app context to the provider selected by `PLANNER_PROVIDER`, turns the response into a task list, and queues it. In `openai` mode, both planning and the queued Aider worker use OpenAI. In `ollama` mode, both use the configured local Ollama-compatible endpoint and model, with cloud credentials removed from the Aider environment and no cloud fallback. The in-process worker runs Aider against the React source one task at a time. |
+| Generate → Aider → Anthropic | Runs a direct edit without the planning queue. Aider receives your prompt and relevant JavaScript and JSX files. This path still uses `ANTHROPIC_API_KEY` and is unaffected by `PLANNER_PROVIDER`. |
 | React and Vite at the configured host, default `127.0.0.1:5773` | Serves the current app in an iframe inside the controller. Vite watches the files and updates the preview when they change. |
 | Local filesystem | The active app lives in `generated-app/`. Saved snapshots live in `saved-apps/`, which Git ignores because they belong to each local workspace. Copy that folder separately to back up or move your saved apps. The queue lives in controller memory, so restarting it clears job status. |
 
@@ -149,9 +156,43 @@ Each clone has one active workspace. Browser tabs connected to the same controll
 
 ## Model providers
 
-**Plan** defaults to OpenAI for both planning and edits. **Generate** defaults to Anthropic for direct edits. You can use **Plan** with just an OpenAI key.
+`PLANNER_PROVIDER` explicitly selects the provider for **Plan**. It defaults to `openai`, preserving the existing behavior:
 
-Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI and Anthropic. [Aider provider documentation](https://aider.chat/docs/llms.html)
+- `PLANNER_PROVIDER=openai` uses `OPENAI_MODEL` (default `gpt-5.4-mini`) for the planning request and the same OpenAI model for queued Aider edits. `OPENAI_API_KEY` is required.
+- `PLANNER_PROVIDER=ollama` uses `OLLAMA_MODEL` and `OLLAMA_API_BASE` for both planning and queued Aider edits. The recommended local values are `qwen2.5:7b` and `http://127.0.0.1:11434`. Ollama mode is local-only: it requires the selected endpoint and model, never falls back to OpenAI or another cloud provider, and does not need `OPENAI_API_KEY` or `OPENAI_API_BASE`.
+
+`Generate` remains the separate Anthropic direct-edit path and continues to use `ANTHROPIC_API_KEY`; changing `PLANNER_PROVIDER` does not change it. Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.
+
+The local `qwen2.5:7b` model has no cloud credentials to configure, but a 7B model may produce less consistent plans or edits than a larger model. Its speed and context capacity also depend on local hardware and the model's Ollama installation. Pull and test the model before selecting it for regular edits.
+
+To test only the local planning request without calling `/plan`, enqueueing a job, or editing `generated-app`, run this from the repository root. The command prints only a success message and deliberately unsets the OpenAI variables:
+
+```sh
+(
+  cd controller
+  env -u OPENAI_API_KEY -u OPENAI_API_BASE \
+    PLANNER_PROVIDER=ollama \
+    OLLAMA_MODEL=qwen2.5:7b \
+    OLLAMA_API_BASE=http://127.0.0.1:11434 \
+    ./venv/bin/python - <<'PY'
+from main import create_planner_client, resolve_planner_provider
+
+provider = resolve_planner_provider()
+response = create_planner_client(provider).chat.completions.create(
+    model=provider.model,
+    messages=[
+        {"role": "system", "content": "Return one numbered planning task."},
+        {"role": "user", "content": "Plan a harmless color change in the React app."},
+    ],
+    max_completion_tokens=128,
+)
+assert response.choices and response.choices[0].message.content
+print("Ollama planning-only smoke passed")
+PY
+)
+```
+
+Aider also supports Gemini, DeepSeek, and OpenRouter. Voice Developer currently exposes OpenAI and Anthropic in addition to the explicit Ollama planner path. [Aider provider documentation](https://aider.chat/docs/llms.html)
 
 ## Data and local execution
 
