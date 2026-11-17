@@ -18,6 +18,30 @@ from controller.store import save_job
 
 router = APIRouter()
 
+PLANNER_TEMPERATURE = 0.7
+# Models (e.g. the GPT-6 family) that reject any temperature except the default.
+_DEFAULT_TEMPERATURE_ONLY: set[str] = set()
+
+
+def _rejects_temperature(exc: Exception) -> bool:
+    if getattr(exc, "param", None) == "temperature":
+        return True
+    text = str(exc).lower()
+    return "temperature" in text and ("unsupported" in text or "not support" in text)
+
+
+def create_plan_completion(client, model: str, messages: list[dict]):
+    """Call the planner. Retry once without temperature if the model only allows its default."""
+    kwargs = {"model": model, "messages": messages, "max_completion_tokens": 2000}
+    if model not in _DEFAULT_TEMPERATURE_ONLY:
+        try:
+            return client.chat.completions.create(temperature=PLANNER_TEMPERATURE, **kwargs)
+        except Exception as exc:
+            if not _rejects_temperature(exc):
+                raise
+            _DEFAULT_TEMPERATURE_ONLY.add(model)
+    return client.chat.completions.create(**kwargs)
+
 
 
 @router.get("/planner-provider")
@@ -40,20 +64,21 @@ async def plan(req: PlanRequest):
     client = create_planner_client(provider)
 
     try:
-        response = client.chat.completions.create(
-            model=provider.model,
-            messages=[
+        response = create_plan_completion(
+            client,
+            provider.model,
+            [
                 {
                     "role": "system",
                     "content": PLANNER_SYSTEM_PROMPT,
                 },
                 {"role": "user", "content": planner_user_msg(req.prompt)},
             ],
-            temperature=0.7,
-            max_completion_tokens=2000,
         )
 
-        plan_text = response.choices[0].message.content
+        plan_text = response.choices[0].message.content or ""
+        if not plan_text.strip():
+            raise RuntimeError(f"{provider.model} returned an empty plan")
         tasks = parse_tasks(plan_text)
 
         job_id = str(uuid.uuid4())

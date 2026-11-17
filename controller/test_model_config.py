@@ -288,3 +288,46 @@ class RunJobCoderTests(ModelConfigCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlannerTemperatureTests(unittest.TestCase):
+    """GPT-6 models reject temperature=0.7; the planner retries once without it."""
+
+    def setUp(self):
+        from controller.routes import planner as planner_routes
+        self.planner = planner_routes
+        planner_routes._DEFAULT_TEMPERATURE_ONLY.clear()
+        self.addCleanup(planner_routes._DEFAULT_TEMPERATURE_ONLY.clear)
+
+    def client(self, reject_temperature):
+        calls = []
+
+        class Rejected(Exception):
+            param = "temperature"
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            if reject_temperature and "temperature" in kwargs:
+                raise Rejected("Unsupported value: 'temperature' does not support 0.7 with this model.")
+            return "ok"
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))), calls
+
+    def test_models_that_accept_temperature_get_it(self):
+        client, calls = self.client(reject_temperature=False)
+        self.assertEqual(self.planner.create_plan_completion(client, "gpt-5.4-mini", []), "ok")
+        self.assertEqual([c.get("temperature") for c in calls], [0.7])
+
+    def test_retries_without_temperature_and_remembers_the_model(self):
+        client, calls = self.client(reject_temperature=True)
+        self.assertEqual(self.planner.create_plan_completion(client, "gpt-6-luna", []), "ok")
+        self.assertEqual(["temperature" in c for c in calls], [True, False])
+        calls.clear()
+        self.planner.create_plan_completion(client, "gpt-6-luna", [])
+        self.assertEqual(["temperature" in c for c in calls], [False])  # no wasted first call
+
+    def test_other_errors_are_not_swallowed(self):
+        def create(**kwargs):
+            raise RuntimeError("rate limited")
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        with self.assertRaisesRegex(RuntimeError, "rate limited"):
+            self.planner.create_plan_completion(client, "gpt-6-luna", [])
