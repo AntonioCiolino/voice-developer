@@ -64,21 +64,17 @@ Register that exact URI in the Google OAuth client when you use the controller f
 
 ### Mac access from a phone on the same network
 
-The Mac is expected to be reachable as `r2m2.local`. To bind both the controller and Vite preview to that mDNS hostname, run:
+Local authentication remains loopback-only unless you explicitly opt in to LAN mode. The Mac's LAN address for this setup is `192.168.5.33`, and `r2m2.local` resolves to that address. With `VOICE_DEVELOPER_LOCAL_AUTH=1` already set in `controller/.env`, stop any existing instance and run:
 
 ```sh
-VOICE_DEVELOPER_HOST=r2m2.local ./start.sh
+VOICE_DEVELOPER_HOST=192.168.5.33 VOICE_DEVELOPER_LOCAL_AUTH_LAN=1 ./start.sh
 ```
 
-The phone URL is [http://r2m2.local:8040](http://r2m2.local:8040), and the preview is on port `5773` at the same hostname. If the phone cannot resolve the `.local` name, find the Mac’s LAN address and use `http://<mac-lan-address>:8040` instead. The phone and Mac must be on the same network, and macOS may require an incoming-connection approval for the two ports. This project does not change macOS firewall or network settings.
+The phone can then open [http://r2m2.local:8040](http://r2m2.local:8040), and the preview is available at [http://r2m2.local:5773](http://r2m2.local:5773). The LAN opt-in is accepted only with `VOICE_DEVELOPER_HOST=192.168.5.33`; it does not allow `0.0.0.0` or another interface. Without `VOICE_DEVELOPER_LOCAL_AUTH_LAN=1`, local authentication still requires `127.0.0.1`.
+
+This mode exposes the controller and unauthenticated preview to devices on the trusted local network. Anyone on that network may use the app, so do not use this mode on an untrusted network and do not expose either port to the public internet. The preview has no sign-in of its own. This setup does not configure Google OAuth, TLS, macOS firewall rules, or router settings. The phone and Mac must be on the same network, and macOS may require an incoming-connection approval for the two ports.
 
 `VOICE_DEVELOPER_HOST` is the exact environment variable used by `start.sh`, Uvicorn, and `generated-app/vite.config.js`. Set it in the shell command as shown; putting it only in `controller/.env` does not make `start.sh` use it for binding.
-
-The phone path has important limitations:
-
-- The preview has no sign-in of its own. The controller protects the UI and API, but anyone who can reach the preview port can load the generated app directly.
-- Google OAuth requires the callback URL to match the hostname used by the browser. For a non-loopback hostname, register the exact callback, such as `http://r2m2.local:8040/auth/callback` or `http://<mac-lan-address>:8040/auth/callback`, only if the Google OAuth client accepts it. Google web OAuth generally requires HTTPS for non-localhost redirect URIs. This repository does not provide TLS or a reverse proxy, so direct phone sign-in over plain HTTP may not work.
-- Do not expose ports `8040` or `5773` to the public internet. Use Google-authenticated mode and a trusted LAN only.
 
 ### Azure VM use
 

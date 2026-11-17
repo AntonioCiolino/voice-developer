@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import os
 import pathlib
 import re
@@ -7,6 +8,7 @@ import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
@@ -26,6 +28,14 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 ALLOWED_EMAILS = {e.strip() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip()}
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "").strip()
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434").rstrip("/")
+LOCAL_AUTH = os.getenv("VOICE_DEVELOPER_LOCAL_AUTH") == "1"
+LAN_LOCAL_AUTH = os.getenv("VOICE_DEVELOPER_LOCAL_AUTH_LAN") == "1"
+LAN_BIND_ADDRESS = "192.168.5.33"
+LAN_HOSTNAMES = {"r2m2.local", LAN_BIND_ADDRESS}
+LAN_CLIENT_NETWORK = ipaddress.ip_network("192.168.4.0/22")
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 SESSION_COOKIE = "vd_session"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -88,8 +98,6 @@ async def job_worker():
         active_job_id = job_id
         job = jobs[job_id]
         job['status'] = 'running'
-        api_key = os.getenv("OPENAI_API_KEY")
-
         for i, task_desc in enumerate(job['tasks']):
             job['current_task'] = i
             job['task_statuses'][i] = 'running'
@@ -128,10 +136,10 @@ async def job_worker():
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(None, lambda tp=task_prompt, fl=files: subprocess.run(
                     ["aider", "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
-                     "--model", "gpt-5.4-mini", "--message", tp, *fl],
+                     *aider_model_args("gpt-5.4-mini"), "--message", tp, *fl],
                     cwd=str(REPO_ROOT),
-                    env={**os.environ, "OPENAI_API_KEY": api_key},
-                    capture_output=True, text=True, timeout=120,
+                    env=aider_environment(),
+                    capture_output=True, text=True, timeout=600 if OLLAMA_MODEL else 120,
                     stdin=subprocess.DEVNULL,
                 ))
                 job['task_logs'][i] = result.stdout[-1000:]
@@ -170,12 +178,47 @@ async def job_worker():
         job_queue.task_done()
 
 
+def aider_model_args(cloud_model: str) -> list[str]:
+    if OLLAMA_MODEL:
+        model = f"ollama_chat/{OLLAMA_MODEL}"
+        return [
+            "--model", model, "--weak-model", model, "--no-analytics",
+            "--no-check-update", "--no-show-release-notes",
+            "--edit-format", "diff", "--no-auto-commits",
+        ]
+    return ["--model", cloud_model]
+
+
+def aider_environment() -> dict[str, str]:
+    env = os.environ.copy()
+    if OLLAMA_MODEL:
+        env.pop("OPENAI_API_KEY", None)
+        env.pop("ANTHROPIC_API_KEY", None)
+        env["OLLAMA_API_BASE"] = OLLAMA_API_BASE
+    return env
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global job_queue
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET or not ALLOWED_EMAILS:
+    if OLLAMA_MODEL:
+        endpoint = urlsplit(OLLAMA_API_BASE)
+        if endpoint.scheme != "http" or endpoint.hostname not in LOOPBACK or endpoint.path:
+            raise RuntimeError("OLLAMA_API_BASE must be a local Ollama HTTP endpoint.")
+        if "cloud" in OLLAMA_MODEL.lower():
+            raise RuntimeError("Choose a downloaded Ollama model for local inference.")
+    configured_host = os.getenv("VOICE_DEVELOPER_HOST", "127.0.0.1")
+    if LOCAL_AUTH:
+        if LAN_LOCAL_AUTH:
+            if configured_host != LAN_BIND_ADDRESS:
+                raise RuntimeError(
+                    f"LAN local authentication requires binding to {LAN_BIND_ADDRESS}."
+                )
+        elif configured_host != "127.0.0.1":
+            raise RuntimeError("Local authentication mode requires binding to 127.0.0.1.")
+    if not LOCAL_AUTH and (not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET or not ALLOWED_EMAILS):
         raise RuntimeError("Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and ALLOWED_EMAILS in controller/.env.")
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", SESSION_SECRET):
+    if not LOCAL_AUTH and not re.fullmatch(r"[0-9a-fA-F]{64}", SESSION_SECRET):
         raise RuntimeError("Set SESSION_SECRET to a random value generated with secrets.token_hex(32).")
     APP_SRC.mkdir(parents=True, exist_ok=True)
     job_queue = asyncio.Queue()
@@ -188,6 +231,30 @@ app = FastAPI(title="voice-developer controller", lifespan=lifespan)
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
+    if LOCAL_AUTH:
+        origin = request.headers.get("origin")
+        request_hostname = (request.url.hostname or "").lower()
+        client_is_loopback = request.client and request.client.host in LOOPBACK
+        client_is_lan = False
+        if request.client:
+            try:
+                client_is_lan = ipaddress.ip_address(request.client.host) in LAN_CLIENT_NETWORK
+            except ValueError:
+                client_is_lan = False
+        if LAN_LOCAL_AUTH:
+            allowed_hostname = request_hostname in LAN_HOSTNAMES
+            allowed_client = client_is_lan
+        else:
+            allowed_hostname = request_hostname in LOOPBACK
+            allowed_client = client_is_loopback
+        if (
+            not allowed_hostname
+            or not allowed_client
+            or (origin and origin != str(request.base_url).rstrip("/"))
+            or request.url.path.startswith("/auth/")
+        ):
+            return HTMLResponse("Local access only", status_code=403)
+        return await call_next(request)
     if request.url.path.startswith("/auth/"):
         return await call_next(request)
     if not get_session_email(request):
@@ -288,7 +355,7 @@ PHONE_UI = """<!doctype html>
     </div>
     <div id="userBar">
       <span>{{USER_NAME}}</span>
-      <button id="logoutBtn" onclick="window.location='/auth/logout'">logout</button>
+      <button {{LOGOUT_VISIBILITY}} id="logoutBtn" onclick="window.location='/auth/logout'">logout</button>
     </div>
   </div>
 
@@ -711,8 +778,10 @@ PHONE_UI = """<!doctype html>
 
 @app.get("/", response_class=HTMLResponse)
 def phone_ui(request: Request):
-    name = get_session_name(request)
-    return PHONE_UI.replace("{{USER_NAME}}", name)
+    name = "Local session" if LOCAL_AUTH else get_session_name(request)
+    return PHONE_UI.replace("{{USER_NAME}}", name).replace(
+        "{{LOGOUT_VISIBILITY}}", "hidden" if LOCAL_AUTH else ""
+    )
 
 
 @app.get("/auth/login")
@@ -784,13 +853,13 @@ def status():
 @app.get("/check-api")
 def check_api():
     api_key = os.getenv("OPENAI_API_KEY")
-    return {"has_api_key": bool(api_key)}
+    return {"has_api_key": bool(OLLAMA_MODEL or api_key)}
 
 
 @app.post("/generate")
 def generate(req: GenerateRequest):
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not OLLAMA_MODEL and not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
     files = [str(f.relative_to(REPO_ROOT)) for f in APP_SRC.rglob("*.jsx")]
@@ -803,15 +872,16 @@ def generate(req: GenerateRequest):
                 "aider",
                 "--yes-always",
                 "--no-pretty",
-                "--model", "claude-sonnet-4-6",
+                *aider_model_args("claude-sonnet-4-6"),
                 "--message", req.prompt,
                 *files,
             ],
             cwd=str(REPO_ROOT),
-            env={**os.environ, "ANTHROPIC_API_KEY": api_key},
+            env=aider_environment(),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=600 if OLLAMA_MODEL else 120,
         )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Aider timed out")
@@ -889,16 +959,11 @@ def _planner_user_msg(prompt: str) -> str:
 async def plan(req: PlanRequest):
     """Generate a plan and enqueue it as a background job."""
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    if not OLLAMA_MODEL and not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
 
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
-
     try:
-        response = client.chat.completions.create(
-            model="gpt-5.4-mini",
-            messages=[
+        messages = [
                 {
                     "role": "system",
                     "content": """You are a software architect planning tasks for a pure React + Vite SPA.
@@ -934,17 +999,37 @@ Tasks must use format: "1) Task name", "2) Task name", etc.
 Keep tasks concrete and self-contained. Never plan tasks that require files outside src/.""",
                 },
                 {"role": "user", "content": _planner_user_msg(req.prompt)},
-            ],
-            temperature=0.7,
-            max_completion_tokens=2000,
-        )
+        ]
+        if OLLAMA_MODEL:
+            async with httpx.AsyncClient(timeout=600, trust_env=False) as client:
+                response = await client.post(
+                    f"{OLLAMA_API_BASE}/api/chat",
+                    json={
+                        "model": OLLAMA_MODEL, "messages": messages,
+                        "stream": False, "think": False, "options": {"num_predict": 2048},
+                    },
+                )
+                response.raise_for_status()
+                plan_text = response.json()["message"]["content"]
+        else:
+            from openai import OpenAI
 
-        plan_text = response.choices[0].message.content
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-5.4-mini", messages=messages,
+                temperature=0.7, max_completion_tokens=2000,
+            )
+            plan_text = response.choices[0].message.content
         tasks = []
         for line in plan_text.split("\n"):
             match = re.match(r"^\s*\d+[\.\)]\s+(.+)$", line.strip())
             if match:
-                tasks.append(match.group(1).strip())
+                task = match.group(1).strip()
+                if task not in tasks:
+                    tasks.append(task)
+
+        if not tasks:
+            raise ValueError("The model returned no numbered tasks.")
 
         job_id = str(uuid.uuid4())
         jobs[job_id] = {

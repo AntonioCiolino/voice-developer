@@ -7,8 +7,20 @@ APP="$ROOT/generated-app"
 PID_FILE="$ROOT/.voice-developer.pids"
 export VOICE_DEVELOPER_HOST="${VOICE_DEVELOPER_HOST:-127.0.0.1}"
 
+if [ "${VOICE_DEVELOPER_LOCAL_AUTH_LAN:-}" = "1" ] && [ "$VOICE_DEVELOPER_HOST" != "192.168.5.33" ]; then
+  echo "VOICE_DEVELOPER_LOCAL_AUTH_LAN=1 requires VOICE_DEVELOPER_HOST=192.168.5.33."
+  exit 1
+fi
+
 if [ ! -f "$CONTROLLER/.env" ] || [ ! -x "$CONTROLLER/venv/bin/uvicorn" ] || [ ! -d "$APP/node_modules" ]; then
   echo "Run ./setup.sh and configure controller/.env first."
+  exit 1
+fi
+
+if [ "$VOICE_DEVELOPER_HOST" = "192.168.5.33" ] \
+  && [ "${VOICE_DEVELOPER_LOCAL_AUTH_LAN:-}" != "1" ] \
+  && grep -Eq '^[[:space:]]*VOICE_DEVELOPER_LOCAL_AUTH[[:space:]]*=[[:space:]]*1[[:space:]]*$' "$CONTROLLER/.env"; then
+  echo "LAN local authentication requires VOICE_DEVELOPER_LOCAL_AUTH_LAN=1."
   exit 1
 fi
 
