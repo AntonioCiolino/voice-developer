@@ -394,6 +394,51 @@ class ControllerCommitTests(TempAppCase):
         self.assertIn("committed 1 file(s)", jobs[JOB_A]["task_logs"][0])
 
 
+class StreamingTests(TempAppCase):
+    """The task log fills in while the coder runs, not only when it exits."""
+
+    def test_output_is_visible_before_the_coder_finishes(self):
+        import threading
+        import time
+        self.make_job(JOB_A, ["t1"])
+        seen_mid_run = []
+
+        def run(cmd, **kwargs):
+            log = kwargs["stdout"]
+            self.assertEqual(kwargs["stderr"], subprocess.STDOUT)
+            self.assertEqual(kwargs["env"]["PYTHONUNBUFFERED"], "1")
+            log.write("Applying edit to src/App.jsx\n")
+            log.flush()
+            deadline = time.time() + 3
+            while time.time() < deadline and "Applying edit" not in jobs[JOB_A]["task_logs"][0]:
+                time.sleep(0.05)
+            seen_mid_run.append(jobs[JOB_A]["task_logs"][0])
+            (self.src / "App.jsx").write_text(APP_JSX.replace("hello", "green"))
+            log.write("Applied edit to src/App.jsx\n")
+            return SimpleNamespace(returncode=0, stdout=None, stderr=None)
+
+        import controller.worker as worker_module
+        with patch.object(worker_module, "STREAM_POLL_SECONDS", 0.05), patch.object(subprocess, "run", run):
+            asyncio.run(run_job(JOB_A))
+        self.assertIn("Applying edit to src/App.jsx", seen_mid_run[0])
+        job = jobs[JOB_A]
+        self.assertEqual(job["task_statuses"], ["done"])
+        self.assertIn("Applied edit to src/App.jsx", job["task_logs"][0])
+
+    def test_timeout_keeps_the_streamed_output(self):
+        self.make_job(JOB_A, ["t1"])
+
+        def run(cmd, **kwargs):
+            kwargs["stdout"].write("model still thinking...\n")
+            kwargs["stdout"].flush()
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        with patch.object(subprocess, "run", run):
+            asyncio.run(run_job(JOB_A))
+        self.assertIn("timed out", jobs[JOB_A]["task_errors"][0])
+        self.assertIn("model still thinking", jobs[JOB_A]["task_errors"][0])
+
+
 class NoEditDetectionTests(TempAppCase):
     """Aider exits 0 even when the model call fails; such a task must not show as done."""
 

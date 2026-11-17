@@ -433,6 +433,8 @@
       `).join('');
     }
 
+    const autoOpenedLogs = new Set();
+
     function updateTaskList(job) {
       const icons = { pending: '○', running: '⟳', done: '✓', failed: '✗' };
       renderPlannerProvider(jobProvider(job));
@@ -444,7 +446,19 @@
         document.getElementById(`taskIcon-${i}`).textContent = icons[s] || '○';
         const taskError = (job.task_errors || [])[i];
         const logText = [job.task_logs[i], taskError].filter(Boolean).join('\n\n');
-        if (logText) document.getElementById(`taskLog-${i}`).textContent = logText;
+        const logEl = document.getElementById(`taskLog-${i}`);
+        if (logText && logEl.textContent !== logText) {
+          // Follow the live output unless the user scrolled up to read earlier lines.
+          const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 24;
+          logEl.textContent = logText;
+          if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+        }
+        if (s === 'running' && logText && !autoOpenedLogs.has(`${job.id}:${i}`)) {
+          // Open the running task's log once so its live output is visible.
+          autoOpenedLogs.add(`${job.id}:${i}`);
+          logEl.style.display = 'block';
+          document.getElementById(`taskChevron-${i}`).textContent = '▼';
+        }
         if (s === 'failed' && taskError) {
           document.getElementById(`taskLog-${i}`).style.display = 'block';
           document.getElementById(`taskChevron-${i}`).textContent = '▼';

@@ -43,6 +43,72 @@ _EDIT_FAILURE_MARKERS = (
 )
 
 
+STREAM_POLL_SECONDS = 1.0
+
+
+def _read_log(path) -> str:
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+async def run_coder_streaming(job_id: str, i: int, command: list[str], provider, timeout: int):
+    """Run the coder and copy its output into the task log while it runs.
+
+    The coder writes stdout and stderr to a log file; a poller copies the file's tail
+    into job["task_logs"][i] every STREAM_POLL_SECONDS so the UI (which polls the job)
+    shows live progress. Returns a CompletedProcess-like result whose stdout holds the
+    whole output. A timeout raises subprocess.TimeoutExpired carrying that output.
+    """
+    import tempfile
+    import pathlib
+
+    job = state.jobs[job_id]
+    env = {**provider_environment(provider), "PYTHONUNBUFFERED": "1"}  # flush output as it is produced
+    with tempfile.TemporaryDirectory(prefix="coder-log-") as tmp:
+        log_path = pathlib.Path(tmp) / "task.log"
+        done = asyncio.Event()
+
+        async def poll():
+            last = None
+            while not done.is_set():
+                text = tail(_read_log(log_path))
+                if text and text != last:
+                    job['task_logs'][i] = text
+                    last = text
+                try:
+                    await asyncio.wait_for(done.wait(), STREAM_POLL_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
+
+        def run():
+            with open(log_path, "w") as log:
+                return subprocess.run(
+                    command,
+                    cwd=str(config.REPO_ROOT),
+                    env=env,
+                    stdout=log, stderr=subprocess.STDOUT, text=True, timeout=timeout,
+                    stdin=subprocess.DEVNULL,
+                )
+
+        poller = asyncio.create_task(poll())
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, run)
+        except subprocess.TimeoutExpired as exc:
+            if not exc.stdout and not exc.stderr:
+                exc.stdout = _read_log(log_path)
+            raise
+        finally:
+            done.set()
+            await poller
+        streamed = _read_log(log_path)
+    # A real run wrote everything to the log file; keep any output the result carries.
+    stdout = result.stdout if isinstance(result.stdout, str) and result.stdout else streamed
+    stderr = result.stderr if isinstance(result.stderr, str) else ""
+    return subprocess.CompletedProcess(command, result.returncode, stdout, stderr)
+
+
 def edit_failure_reason(stdout, stderr) -> str:
     """Return why Aider applied no edit, or "" when its output shows no failure."""
     output = text_of(stdout) + "\n" + text_of(stderr)
@@ -148,14 +214,7 @@ async def run_job(job_id: str) -> None:
             snapshot = snapshot_task_scope()
             files = [str(f.relative_to(config.REPO_ROOT)) for f in task_scope_files()]
             command = build_coder_command(engine, provider, build_task_prompt(job, i), files, edit_format)
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, lambda cmd=command: subprocess.run(
-                cmd,
-                cwd=str(config.REPO_ROOT),
-                env=provider_environment(provider),
-                capture_output=True, text=True, timeout=timeout,
-                stdin=subprocess.DEVNULL,
-            ))
+            result = await run_coder_streaming(job_id, i, command, provider, timeout)
         except CoderEngineNotImplemented as exc:
             _fail_task(job_id, i, snapshot, str(exc))
             return
