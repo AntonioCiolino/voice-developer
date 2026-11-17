@@ -572,14 +572,26 @@ PHONE_UI = """<!doctype html>
 
     restoreProcessingState();
 
+    function renderPlannerProvider(provider) {
+      if (!provider || !provider.label || !provider.endpoint) return;
+      document.getElementById('providerStatus').textContent = `Planner: ${provider.label} — ${provider.endpoint}`;
+    }
+
+    function showPlannerConfigurationError() {
+      document.getElementById('providerStatus').textContent = 'Planner configuration error — check provider settings';
+    }
+
     (async function loadPlannerProvider() {
       try {
         const res = await fetch('/planner-provider');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail);
-        document.getElementById('providerStatus').textContent = `Planner: ${data.label} — ${data.endpoint}`;
+        if (!res.ok) {
+          showPlannerConfigurationError();
+          return;
+        }
+        renderPlannerProvider(data);
       } catch (e) {
-        document.getElementById('providerStatus').textContent = `Planner unavailable: ${e.message}`;
+        document.getElementById('providerStatus').textContent = 'Planner unavailable — controller could not report provider';
       }
     })();
 
@@ -601,6 +613,7 @@ PHONE_UI = """<!doctype html>
         if (!res.ok) return;
         const job = await res.json();
         if (!job) { alert('No active plan running.'); return; }
+        renderPlannerProvider(job.provider);
         document.getElementById('fullPlanText').textContent = job.plan || '';
         renderTaskList(job.tasks);
         updateTaskList(job);
@@ -619,6 +632,7 @@ PHONE_UI = """<!doctype html>
         if (!res.ok) return;
         const job = await res.json();
         if (!job) return;
+        renderPlannerProvider(job.provider);
         if (job.status === 'queued' || job.status === 'running') {
           localStorage.setItem('activeJobId', job.job_id);
           setExecuting(true);
@@ -643,6 +657,7 @@ PHONE_UI = """<!doctype html>
         });
         const data = await res.json();
         if (res.ok) {
+          renderPlannerProvider(data.provider);
           localStorage.setItem('activeJobId', data.job_id);
           document.getElementById('fullPlanText').textContent = data.plan;
           renderTaskList(data.tasks || []);
@@ -680,6 +695,7 @@ PHONE_UI = """<!doctype html>
 
     function updateTaskList(job) {
       const icons = { pending: '○', running: '⟳', done: '✓', failed: '✗' };
+      renderPlannerProvider(job.provider);
       job.tasks.forEach((task, i) => {
         const taskEl = document.getElementById(`task-${i}`);
         if (!taskEl) return;

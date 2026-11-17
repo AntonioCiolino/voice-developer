@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Expose safe planner provider evidence through the controller API and embedded UI, add focused reporting tests, and perform a non-destructive local Ollama planning smoke check with explicit evidence limits.",
+  "status": "completed",
+  "steps": [
+    "In controller/main.py, keep planner_provider_info limited to provider label, model, and a safe endpoint representation; expose it from /planner-provider and include the same evidence in /plan responses and queued job data without returning secrets.",
+    "In the PHONE_UI embedded markup and script, keep the provider status visible and render the exact active local label Ollama / local-only with its local endpoint; retain OpenAI as a visibly distinct OpenAI option and show a safe configuration error when provider resolution fails.",
+    "In controller/test_planner_provider.py, add or tighten unittest coverage for accepted/rejected endpoint forms, safe provider reporting, plan/provider payload behavior where practical, cloud-environment removal, and OpenAI separation. Do not test through or alter generated-app.",
+    "If a local Ollama server and configured model are available, run a direct planning-only request with cloud variables unset, capture the safe provider label/endpoint and returned plan text, and observe active TCP connections with lsof or nettop during the request when practical. Record that this proves application-level endpoint selection/environment scrubbing only, not that other OS processes made no network connections."
+  ],
+  "acceptance_criteria": [
+    "The controller UI visibly says Ollama / local-only when Ollama is active and shows only the safe local endpoint, never a credential.",
+    "The planner provider API/plan response reports the active provider and endpoint safely, and OpenAI mode reports as OpenAI rather than local-only.",
+    "Focused tests pass for endpoint enforcement, provider reporting, and no-cloud subprocess environment behavior.",
+    "The local smoke evidence identifies the provider and endpoint and clearly distinguishes application-level enforcement from OS-level network proof."
+  ],
+  "verification": [
+    "controller/venv/bin/python -m unittest controller.test_planner_provider",
+    "controller/venv/bin/python -m py_compile controller/main.py controller/test_planner_provider.py",
+    "If Ollama is running locally: execute the README planning-only smoke pattern from the repository root with OPENAI_API_KEY and OPENAI_API_BASE unset, and record the printed provider/endpoint evidence and successful local response; observe lsof -nP -iTCP -sTCP:ESTABLISHED or nettop during the request when practical.",
+    "git diff --check -- controller/main.py controller/test_planner_provider.py"
+  ],
+  "blocked_reason": null,
+  "findings": "Implemented and verified FEAT-002 provider evidence/UI coverage without touching generated-app. The embedded PHONE_UI now renders provider evidence from /planner-provider, the /plan response, and queued/active job payloads; it displays the exact Ollama / local-only label with the safe http://127.0.0.1:11434/v1 endpoint, keeps OpenAI visibly distinct, and uses a generic Planner configuration error message rather than echoing server details or secrets. Added focused route and /plan payload tests; the full focused suite passed: controller/venv/bin/python -m unittest controller.test_planner_provider (15 tests, OK). Compilation passed: controller/venv/bin/python -m py_compile controller/main.py controller/test_planner_provider.py. Diff validation passed: git diff --check -- controller/main.py controller/test_planner_provider.py (no errors). A non-destructive README-pattern planning-only smoke ran from the repository root with OPENAI_API_KEY and OPENAI_API_BASE unset, PLANNER_PROVIDER=ollama, OLLAMA_MODEL=qwen2.5:7b, and OLLAMA_API_BASE=http://127.0.0.1:11434. It printed PROVIDER_EVIDENCE {'name': 'ollama', 'label': 'Ollama / local-only', 'model': 'qwen2.5:7b', 'endpoint': 'http://127.0.0.1:11434/v1'} and PLAN_RESPONSE '1. Update the state of a component to change the background color when a button is clicked.'. During the request, lsof -nP -a -p 8221 -iTCP -sTCP:ESTABLISHED showed the planner process connected only to 127.0.0.1:11434 (local Ollama). This is application-level evidence that the selected planner request used the validated loopback endpoint and that Ollama-mode subprocess environment scrubbing was tested; it is not OS-level proof that other processes made no network connections, nor a firewall/router guarantee. The earlier FEAT-001 connection observation also showed an Ollama-process connection from 192.168.5.33 to 34.36.133.15:443, so no global no-network claim is made. No cloud model was requested, no OS-wide network or firewall/router setting was changed, and unrelated generated-app/package.json and generated-app/src/App.jsx changes remain preserved."
+}

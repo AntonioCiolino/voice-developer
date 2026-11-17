@@ -1,11 +1,19 @@
+import asyncio
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from controller.main import (
+    PlanRequest,
     PlannerConfigurationError,
     build_aider_command,
     create_planner_client,
+    get_planner_provider,
+    jobs,
+    plan as create_plan,
     planner_provider_info,
     provider_environment,
     resolve_planner_provider,
@@ -167,6 +175,78 @@ class PlannerProviderTests(unittest.TestCase):
 
         self.assertEqual(environment["OPENAI_API_KEY"], "test-key")
         self.assertEqual(environment["PATH"], "/usr/bin")
+
+    def test_provider_route_reports_safe_active_provider(self):
+        with patch.dict(os.environ, {
+            "PLANNER_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "qwen2.5:7b",
+            "OLLAMA_API_BASE": "http://127.0.0.1:11434",
+        }, clear=True):
+            self.assertEqual(get_planner_provider(), {
+                "name": "ollama",
+                "label": "Ollama / local-only",
+                "model": "qwen2.5:7b",
+                "endpoint": "http://127.0.0.1:11434/v1",
+            })
+
+    def test_provider_route_error_does_not_echo_rejected_endpoint(self):
+        with patch.dict(os.environ, {
+            "PLANNER_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "qwen2.5:7b",
+            "OLLAMA_API_BASE": "https://cloud.example/v1",
+        }, clear=True):
+            with self.assertRaises(HTTPException) as raised:
+                get_planner_provider()
+
+        self.assertNotIn("cloud.example", str(raised.exception))
+        self.assertIn("localhost", str(raised.exception))
+
+    def test_plan_response_and_queued_job_include_same_safe_provider(self):
+        class FakeQueue:
+            def __init__(self):
+                self.items = []
+
+            async def put(self, job_id):
+                self.items.append(job_id)
+
+            def qsize(self):
+                return len(self.items)
+
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="## Tasks\\n1) Keep it local"))]
+        )
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **kwargs: response)
+            )
+        )
+        queue = FakeQueue()
+        existing_jobs = set(jobs)
+
+        with (
+            patch.dict(os.environ, {
+                "PLANNER_PROVIDER": "ollama",
+                "OLLAMA_MODEL": "qwen2.5:7b",
+                "OLLAMA_API_BASE": "http://127.0.0.1:11434",
+            }, clear=True),
+            patch("controller.main.create_planner_client", return_value=fake_client),
+            patch("controller.main._planner_user_msg", return_value="harmless prompt"),
+            patch("controller.main.job_queue", queue),
+        ):
+            result = asyncio.run(create_plan(PlanRequest(prompt="harmless prompt")))
+
+        try:
+            self.assertEqual(result["provider"], {
+                "name": "ollama",
+                "label": "Ollama / local-only",
+                "model": "qwen2.5:7b",
+                "endpoint": "http://127.0.0.1:11434/v1",
+            })
+            self.assertEqual(jobs[result["job_id"]]["provider"], result["provider"])
+            self.assertNotIn("OPENAI_API_KEY", str(result))
+        finally:
+            for job_id in set(jobs) - existing_jobs:
+                jobs.pop(job_id, None)
 
 
 if __name__ == "__main__":
