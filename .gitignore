@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 controller/venv/
+controller/aider-venv/
 controller/.env
 controller/.env.backups/
 

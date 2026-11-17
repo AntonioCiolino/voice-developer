@@ -331,7 +331,8 @@ class RoleConfigTests(unittest.TestCase):
             self.assertNotIn(variable, environment)
         self.assertEqual(environment["OLLAMA_API_BASE"], BASE)
         self.assertNotIn("test-secret", str(environment))
-        self.assertEqual(build_aider_command(coder, "t", ["a"])[5], "ollama_chat/qwen2.5-coder:7b")
+        cmd = build_aider_command(coder, "t", ["a"])
+        self.assertEqual(cmd[cmd.index("--model") + 1], "ollama_chat/qwen2.5-coder:7b")
         self.assertEqual(planner.api_key, "test-secret")
     def test_openai_coder_environment_has_only_its_own_credential(self):
         _, coder = resolve_roles({"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "m",
@@ -342,7 +343,8 @@ class RoleConfigTests(unittest.TestCase):
         self.assertEqual(environment["HTTPS_PROXY"], "http://proxy")
         for variable in ("ANTHROPIC_API_KEY", "SESSION_SECRET", "GOOGLE_CLIENT_SECRET"):
             self.assertNotIn(variable, environment)
-        self.assertEqual(build_aider_command(coder, "t", [])[5], "big")
+        cmd = build_aider_command(coder, "t", [])
+        self.assertEqual(cmd[cmd.index("--model") + 1], "big")
     def test_ollama_planner_client_uses_placeholder_key(self):
         planner, _ = resolve_roles({**ALL_LOCAL, "OPENAI_API_KEY": "test-secret"})
         with patch("openai.OpenAI") as client:
@@ -380,3 +382,63 @@ class RoleConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+LMSTUDIO_ENV = {"PLANNER_PROVIDER": "lmstudio", "LMSTUDIO_MODEL": "qwen2.5-coder-7b-instruct"}
+
+
+class LmStudioProviderTests(unittest.TestCase):
+    def test_defaults_to_loopback_port_1234(self):
+        provider = resolve_planner_provider(LMSTUDIO_ENV)
+        self.assertEqual(provider.name, "lmstudio")
+        self.assertEqual(provider.model, "qwen2.5-coder-7b-instruct")
+        self.assertEqual(provider.planner_base_url, "http://127.0.0.1:1234/v1")
+        self.assertTrue(provider.is_local)
+
+    def test_api_base_is_normalized_and_must_be_loopback(self):
+        provider = resolve_planner_provider({**LMSTUDIO_ENV, "LMSTUDIO_API_BASE": "http://localhost:4321/v1/"})
+        self.assertEqual(provider.planner_base_url, "http://localhost:4321/v1")
+        for bad in ("http://192.168.1.5:1234", "https://lmstudio.example.com", "http://u:p@127.0.0.1:1234"):
+            with self.assertRaises(PlannerConfigurationError) as ctx:
+                resolve_planner_provider({**LMSTUDIO_ENV, "LMSTUDIO_API_BASE": bad})
+            self.assertIn("LMSTUDIO_API_BASE", str(ctx.exception))
+
+    def test_model_is_required_and_role_model_wins(self):
+        with self.assertRaises(PlannerConfigurationError) as ctx:
+            resolve_planner_provider({"PLANNER_PROVIDER": "lmstudio"})
+        self.assertIn("LMSTUDIO_MODEL", str(ctx.exception))
+        provider = resolve_planner_provider({**LMSTUDIO_ENV, "PLANNER_MODEL": "phi-4-mini"})
+        self.assertEqual(provider.model, "phi-4-mini")
+
+    def test_unknown_provider_lists_all_three(self):
+        with self.assertRaises(PlannerConfigurationError) as ctx:
+            resolve_planner_provider({"PLANNER_PROVIDER": "lmstuido"})
+        for name in ("openai", "ollama", "lmstudio"):
+            self.assertIn(name, str(ctx.exception))
+
+    def test_aider_command_and_environment(self):
+        coder = resolve_coder_provider({"PLANNER_PROVIDER": "openai", "OPENAI_API_KEY": "secret",
+                                        "CODER_PROVIDER": "lmstudio", "CODER_MODEL": "qwen2.5-coder-7b-instruct"})
+        cmd = build_aider_command(coder, "t", ["a"])
+        self.assertEqual(cmd[cmd.index("--model") + 1], "lm_studio/qwen2.5-coder-7b-instruct")
+        env = provider_environment(coder, {"PATH": "/bin", "OPENAI_API_KEY": "secret",
+                                           "ANTHROPIC_API_KEY": "secret", "OLLAMA_API_BASE": "x"})
+        self.assertEqual(env["LM_STUDIO_API_BASE"], "http://127.0.0.1:1234/v1")
+        self.assertEqual(env["LM_STUDIO_API_KEY"], "lm-studio")
+        self.assertEqual(env["PATH"], "/bin")
+        self.assertNotIn("secret", " ".join(env.values()))
+        self.assertNotIn("OLLAMA_API_BASE", env)
+
+    def test_planner_client_uses_local_server(self):
+        client = create_planner_client(resolve_planner_provider(LMSTUDIO_ENV))
+        self.assertEqual(str(client.base_url).rstrip("/"), "http://127.0.0.1:1234/v1")
+
+    def test_reporting_and_local_only(self):
+        lm = resolve_planner_provider(LMSTUDIO_ENV)
+        self.assertEqual(planner_provider_info(lm)["label"], "LM Studio / local-only")
+        self.assertEqual(role_provider_info("coder", lm)["label"], "LM Studio (local)")
+        ollama = resolve_planner_provider({"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen2.5:7b"})
+        cloud = resolve_planner_provider({"OPENAI_API_KEY": "k"})
+        self.assertTrue(roles_info(lm, lm)["local_only"])
+        self.assertTrue(roles_info(ollama, lm)["local_only"])
+        self.assertFalse(roles_info(cloud, lm)["local_only"])

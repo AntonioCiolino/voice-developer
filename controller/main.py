@@ -96,18 +96,33 @@ class PlannerProvider:
     model: str
     api_key: str | None = None
     ollama_api_base: str | None = None
+    lmstudio_api_base: str | None = None
+
+    @property
+    def is_local(self) -> bool:
+        return self.name in LOCAL_PROVIDERS
 
     @property
     def planner_base_url(self) -> str | None:
         if self.name == "ollama":
             return f"{self.ollama_api_base}/v1"
+        if self.name == "lmstudio":
+            return f"{self.lmstudio_api_base}/v1"
         return None
 
     @property
     def aider_model(self) -> str:
         if self.name == "ollama":
             return f"ollama_chat/{self.model}"
+        if self.name == "lmstudio":
+            return f"lm_studio/{self.model}"
         return self.model
+
+
+LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio"})
+# LM Studio's local server does not check the key, but the OpenAI client and
+# litellm both require a non-empty value.
+LMSTUDIO_PLACEHOLDER_KEY = "lm-studio"
 
 
 _OLLAMA_SUBPROCESS_ENV_VARS = frozenset({
@@ -130,17 +145,18 @@ _OLLAMA_SUBPROCESS_ENV_VARS = frozenset({
 })
 
 
-def _normalize_ollama_api_base(value: str) -> str:
+def _normalize_ollama_api_base(value: str, variable: str = "OLLAMA_API_BASE") -> str:
+    """Normalize a local server base URL and require it to be loopback (used for Ollama and LM Studio)."""
     base = value.strip().rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3].rstrip("/")
     parsed = urlparse(base)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
         raise PlannerConfigurationError(
-            "OLLAMA_API_BASE must be an HTTP(S) URL without a query or fragment"
+            f"{variable} must be an HTTP(S) URL without a query or fragment"
         )
     if parsed.username is not None or parsed.password is not None:
-        raise PlannerConfigurationError("OLLAMA_API_BASE must not include URL credentials")
+        raise PlannerConfigurationError(f"{variable} must not include URL credentials")
     try:
         host = parsed.hostname
         parsed.port
@@ -151,16 +167,18 @@ def _normalize_ollama_api_base(value: str) -> str:
         is_loopback = False
     if not is_loopback:
         raise PlannerConfigurationError(
-            "OLLAMA_API_BASE must resolve to localhost, 127.0.0.1, or ::1 in local-only mode"
+            f"{variable} must resolve to localhost, 127.0.0.1, or ::1 in local-only mode"
         )
     return base
 
 
-_VALID_PROVIDERS = {"openai", "ollama"}
+_VALID_PROVIDERS = {"openai", "ollama", "lmstudio"}
 def _provider_name(values, provider_var: str, default: str) -> str:
     name = values.get(provider_var, "").strip().lower() or default
     if name not in _VALID_PROVIDERS:
-        raise PlannerConfigurationError(f"{provider_var} must be either 'openai' or 'ollama'")
+        raise PlannerConfigurationError(
+            f"{provider_var} must be one of 'openai', 'ollama', or 'lmstudio'"
+        )
     return name
 def _resolve_role(values, provider_var: str, model_var: str, default_provider: str) -> PlannerProvider:
     """Resolve one role (planner or coder). A bad setting raises; it never falls back to another provider."""
@@ -172,6 +190,19 @@ def _resolve_role(values, provider_var: str, model_var: str, default_provider: s
             raise PlannerConfigurationError(f"OPENAI_API_KEY is required when {provider_var}=openai")
         model = role_model or values.get("OPENAI_MODEL", "gpt-5.4-mini").strip() or "gpt-5.4-mini"
         return PlannerProvider(name="openai", model=model, api_key=api_key)
+    if provider_name == "lmstudio":
+        model = role_model or values.get("LMSTUDIO_MODEL", "").strip()
+        if not model:
+            raise PlannerConfigurationError(
+                f"LMSTUDIO_MODEL (or {model_var}) is required when {provider_var}=lmstudio"
+            )
+        try:
+            api_base = _normalize_ollama_api_base(
+                values.get("LMSTUDIO_API_BASE", "http://127.0.0.1:1234"), "LMSTUDIO_API_BASE"
+            )
+        except PlannerConfigurationError as exc:
+            raise PlannerConfigurationError(f"{provider_var}=lmstudio: {exc}") from None
+        return PlannerProvider(name="lmstudio", model=model, lmstudio_api_base=api_base)
     model = role_model or values.get("OLLAMA_MODEL", "").strip()
     if not model:
         raise PlannerConfigurationError(
@@ -202,6 +233,8 @@ def create_planner_client(provider: PlannerProvider):
 
     if provider.name == "ollama":
         return OpenAI(api_key="ollama", base_url=provider.planner_base_url)
+    if provider.name == "lmstudio":
+        return OpenAI(api_key=LMSTUDIO_PLACEHOLDER_KEY, base_url=provider.planner_base_url)
     return OpenAI(api_key=provider.api_key)
 
 
@@ -211,6 +244,13 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
         return {
             "name": "ollama",
             "label": "Ollama / local-only",
+            "model": provider.model,
+            "endpoint": provider.planner_base_url,
+        }
+    if provider.name == "lmstudio":
+        return {
+            "name": "lmstudio",
+            "label": "LM Studio / local-only",
             "model": provider.model,
             "endpoint": provider.planner_base_url,
         }
@@ -226,6 +266,8 @@ def role_provider_info(role: str, provider: PlannerProvider) -> dict[str, str]:
     """Safe per-role evidence (no keys)."""
     if provider.name == "ollama":
         label, endpoint = "Ollama (local)", provider.planner_base_url
+    elif provider.name == "lmstudio":
+        label, endpoint = "LM Studio (local)", provider.planner_base_url
     else:
         label, endpoint = "OpenAI (cloud)", "OpenAI-managed endpoint"
     return {"role": role, "name": provider.name, "label": label,
@@ -234,7 +276,7 @@ def roles_info(planner: PlannerProvider, coder: PlannerProvider) -> dict:
     return {
         "planner": role_provider_info("planner", planner),
         "coder": role_provider_info("coder", coder),
-        "local_only": planner.name == "ollama" and coder.name == "ollama",
+        "local_only": planner.is_local and coder.is_local,
     }
 _OPENAI_OPTIONAL_ENV_VARS = frozenset({
     "OPENAI_API_BASE", "OPENAI_BASE_URL", "OPENAI_ORG_ID",
@@ -251,6 +293,11 @@ def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | N
     }
     if provider.name == "ollama":
         environment["OLLAMA_API_BASE"] = provider.ollama_api_base
+        return environment
+    if provider.name == "lmstudio":
+        # litellm's lm_studio/ provider reads these two variables.
+        environment["LM_STUDIO_API_BASE"] = provider.planner_base_url
+        environment["LM_STUDIO_API_KEY"] = LMSTUDIO_PLACEHOLDER_KEY
         return environment
     for variable in _OPENAI_OPTIONAL_ENV_VARS:
         if variable in source:
@@ -306,12 +353,34 @@ def resolve_coder_edit_format(env: dict[str, str] | None = None) -> str:
     return edit_format
 
 
+AIDER_VENV_BIN = REPO_ROOT / "controller" / "aider-venv" / "bin" / "aider"
+
+
+def resolve_aider_bin(env: dict[str, str] | None = None) -> str:
+    """AIDER_BIN (.env only) selects the Aider executable.
+
+    Default: controller/aider-venv/bin/aider when it exists (a separate environment, so
+    Aider's dependencies never change the controller's pinned packages), else `aider` on PATH.
+    """
+    values = os.environ if env is None else env
+    configured = values.get("AIDER_BIN", "").strip()
+    if configured:
+        return configured
+    return str(AIDER_VENV_BIN) if AIDER_VENV_BIN.exists() else "aider"
+
+
 def build_aider_command(
     provider: PlannerProvider, task_prompt: str, files: list[str], edit_format: str = "diff"
 ) -> list[str]:
     """Build the queued Aider invocation for the selected provider."""
+    # Commits are made by the controller (commit_task), so Aider never asks the
+    # model to write a commit message and never commits unrelated dirty files.
     return [
-        "aider", "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
+        resolve_aider_bin(), "--yes-always", "--no-pretty", "--no-suggest-shell-commands",
+        "--no-auto-commits", "--no-dirty-commits",
+        # Local models (LM Studio, custom Ollama tags) are unknown to Aider. Its
+        # warning asks to open a docs page, and --yes-always would open the browser.
+        "--no-show-model-warnings",
         "--model", provider.aider_model, "--edit-format", edit_format,
         "--message", task_prompt, *files,
     ]
@@ -501,6 +570,61 @@ def revert_task(snapshot: dict) -> str:
     return "; ".join(notes)
 
 
+def changed_task_paths(snapshot: dict) -> list[str]:
+    """Paths (relative to APP_ROOT) that a task changed, created, or deleted."""
+    changed = []
+    for rel, data in snapshot["files"].items():
+        path = APP_ROOT / rel
+        if not path.exists() or path.read_bytes() != data:
+            changed.append(rel)
+    for f in APP_SRC.rglob("*"):
+        rel = f.relative_to(APP_ROOT).as_posix()
+        if f.is_file() and rel not in snapshot["src_files"]:
+            changed.append(rel)
+    return changed
+
+
+def commit_task(snapshot: dict, message: str) -> str:
+    """Commit only the files this task changed, with a controller-written message."""
+    if not (APP_ROOT / ".git").exists():
+        return "no app repo, nothing committed"
+    paths = changed_task_paths(snapshot)
+    if not paths:
+        return "no file changes to commit"
+    added = _git("add", "-A", "--", *paths)
+    if added.returncode != 0:
+        return f"commit skipped: git add failed: {added.stderr.strip()[-300:]}"
+    committed = _git("commit", "-q", "-m", message, "--", *paths)
+    if committed.returncode != 0:
+        return f"commit skipped: {(committed.stderr or committed.stdout).strip()[-300:]}"
+    return f"committed {len(paths)} file(s)"
+
+
+_APP_IGNORES = ("node_modules/", "dist/", ".vite/", ".DS_Store")
+
+
+def ensure_app_repo_hygiene() -> str:
+    """Keep build artifacts out of the app repo so Aider does not scan thousands of files."""
+    if not (APP_ROOT / ".git").exists():
+        return ""
+    gitignore = APP_ROOT / ".gitignore"
+    existing = gitignore.read_text().splitlines() if gitignore.exists() else []
+    missing = [p for p in _APP_IGNORES if p not in existing]
+    if missing:
+        text = "\n".join(existing + missing).strip("\n") + "\n"
+        gitignore.write_text(text)
+    tracked = [p.rstrip("/") for p in _APP_IGNORES if _git("ls-files", "--", p.rstrip("/")).stdout.strip()]
+    if tracked:
+        _git("rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *tracked)
+    if not missing and not tracked:
+        return ""
+    _git("add", "--", ".gitignore")
+    # Commit the index without a pathspec: a pathspec commit would re-stage the
+    # ignored files from the working tree and undo the `rm --cached`.
+    result = _git("commit", "-q", "-m", "chore: stop tracking build artifacts")
+    return "untracked build artifacts" if result.returncode == 0 else ""
+
+
 # ---- Job execution ------------------------------------------------------
 
 def _text(value) -> str:
@@ -572,6 +696,10 @@ async def run_job(job_id: str) -> None:
         return
     job['engine'] = engine
     save_job(job_id)
+    try:
+        ensure_app_repo_hygiene()
+    except Exception:
+        pass  # hygiene is best-effort; never block a run on it
 
     for i in range(n):
         if job['task_statuses'][i] == 'done':
@@ -605,7 +733,11 @@ async def run_job(job_id: str) -> None:
             _fail_task(job_id, i, snapshot, message)
             return
         except FileNotFoundError as exc:
-            missing = "aider not found — run: pip install aider-chat" if engine == "aider" else str(exc)
+            missing = (
+                f"aider not found at '{resolve_aider_bin()}'. Create it with: "
+                "python3 -m venv controller/aider-venv && "
+                "controller/aider-venv/bin/pip install aider-chat==0.86.2 (or set AIDER_BIN)"
+            ) if engine == "aider" else str(exc)
             _fail_task(job_id, i, snapshot, missing)
             return
         except Exception as exc:
@@ -628,6 +760,11 @@ async def run_job(job_id: str) -> None:
             if len(content) < 100 or 'export default' not in content:
                 _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
                 return
+        try:
+            note = commit_task(snapshot, f"Task {i+1}/{n}: {job['tasks'][i]}"[:200])
+        except Exception as exc:
+            note = f"commit skipped: {exc}"
+        job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + note
         job['task_statuses'][i] = 'done'
         save_job(job_id)
 

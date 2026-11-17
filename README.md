@@ -157,11 +157,12 @@ Each clone has one active workspace. Browser tabs connected to the same controll
 Plan uses two independently configured roles, set only in `controller/.env` (there is no UI setting):
 | Variable | Meaning | Default when unset |
 | --- | --- | --- |
-| `PLANNER_PROVIDER` | `openai` or `ollama` for the planner | `openai` |
-| `PLANNER_MODEL` | Planner model | `OPENAI_MODEL` (default `gpt-5.4-mini`) or `OLLAMA_MODEL`, by planner provider |
-| `CODER_PROVIDER` | `openai` or `ollama` for the queued Aider edits | the planner provider |
-| `CODER_MODEL` | Coder (Aider) model | `OPENAI_MODEL` or `OLLAMA_MODEL`, by coder provider |
+| `PLANNER_PROVIDER` | `openai`, `ollama`, or `lmstudio` for the planner | `openai` |
+| `PLANNER_MODEL` | Planner model | `OPENAI_MODEL` (default `gpt-5.4-mini`), `OLLAMA_MODEL`, or `LMSTUDIO_MODEL`, by planner provider |
+| `CODER_PROVIDER` | `openai`, `ollama`, or `lmstudio` for the queued Aider edits | the planner provider |
+| `CODER_MODEL` | Coder (Aider) model | `OPENAI_MODEL`, `OLLAMA_MODEL`, or `LMSTUDIO_MODEL`, by coder provider |
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_API_BASE` | Existing settings; shared by both roles | unchanged |
+| `LMSTUDIO_MODEL`, `LMSTUDIO_API_BASE` | LM Studio model identifier and local server URL; shared by both roles | no model; `http://127.0.0.1:1234` |
 Existing `.env` files that set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL` behave exactly as before. An empty value counts as unset. Both roles share one `OLLAMA_API_BASE`, which must be loopback (`localhost`, `127.0.0.1`, or `::1`), and one `OPENAI_API_KEY`.
 
 Bad configuration fails with a clear message and never falls back from a local role to a cloud one: an invalid provider name, `openai` without `OPENAI_API_KEY`, `ollama` without a model, or a non-loopback `OLLAMA_API_BASE`. A bad coder setting also fails **Plan** up front, so you never get a plan that cannot run.
@@ -193,9 +194,18 @@ Example combinations:
   CODER_MODEL=<stronger model>
   OPENAI_API_KEY=...
   ```
+- **Cloud planner, LM Studio coder.** In LM Studio, start the local server (Developer tab) and load the model. `LMSTUDIO_MODEL` / `CODER_MODEL` is the identifier LM Studio shows for it (also listed by `lms ls`). Aider reaches it as `lm_studio/<model>`.
+  ```
+  PLANNER_PROVIDER=openai
+  OPENAI_API_KEY=...
+  CODER_PROVIDER=lmstudio
+  CODER_MODEL=qwen2.5-coder-7b-instruct
+  LMSTUDIO_API_BASE=http://127.0.0.1:1234
+  ```
+  `lmstudio` follows the same rules as `ollama`: the server URL must be loopback, the Aider process gets the environment allowlist plus `LM_STUDIO_API_BASE` and a placeholder `LM_STUDIO_API_KEY` (LM Studio does not check it), and it never falls back to a cloud provider.
 - **Legacy, unchanged.** Set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL`.
 
-Credential isolation per role: an `ollama` Aider process gets a small allowlist of environment variables plus `OLLAMA_API_BASE`. An `openai` Aider process gets the same allowlist plus `OPENAI_API_KEY`, optional `OPENAI_API_BASE`/`OPENAI_BASE_URL`/`OPENAI_ORG_ID`, and proxy and certificate variables. It does not inherit unrelated secrets such as `ANTHROPIC_API_KEY`, `GOOGLE_CLIENT_SECRET`, or `SESSION_SECRET`. The controller badge shows planner and coder provider and model separately and shows `Local-only` only when both are `ollama`.
+Credential isolation per role: an `ollama` Aider process gets a small allowlist of environment variables plus `OLLAMA_API_BASE`. An `openai` Aider process gets the same allowlist plus `OPENAI_API_KEY`, optional `OPENAI_API_BASE`/`OPENAI_BASE_URL`/`OPENAI_ORG_ID`, and proxy and certificate variables. It does not inherit unrelated secrets such as `ANTHROPIC_API_KEY`, `GOOGLE_CLIENT_SECRET`, or `SESSION_SECRET`. The controller badge shows planner and coder provider and model separately and shows `Local-only` only when both are local (`ollama` or `lmstudio`).
 
 Local model caveats on an M2 Pro with 16 GB RAM:
 - Models of about 7-8B fit. `qwen3:14b` is likely to swap.
@@ -216,6 +226,7 @@ Optional coder settings in `controller/.env` (see `controller/.env.example`):
 
 - `CODER_TIMEOUT_SECONDS` is the per-task timeout, default `120`.
 - `CODER_EDIT_FORMAT` is the Aider edit format: `diff` (default), `diff-fenced`, `udiff`, or `whole`.
+- `AIDER_BIN` is the Aider executable. By default the controller uses `controller/aider-venv/bin/aider` (Aider 0.86.2, created by `./setup.sh`), falling back to `aider` on `PATH`. Aider lives in its own environment because its dependencies would otherwise replace the controller's pinned FastAPI, Pydantic and OpenAI versions. To create it by hand: `python3 -m venv controller/aider-venv && controller/aider-venv/bin/pip install aider-chat==0.86.2`.
 - `CODER_ENGINE` is `aider` (default) or `opencode`. OpenCode is a stub that defines the command (`opencode run --model <provider/model> --format json`, Ollama through an OpenAI-compatible `/v1` endpoint with a 64k+ context). Selecting it fails with "not implemented yet"; it never falls back to Aider or a cloud provider.
 
 Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.

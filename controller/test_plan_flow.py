@@ -121,7 +121,18 @@ class CoderConfigTests(unittest.TestCase):
         self.assertEqual(build_opencode_command(cloud, "t")[3], "openai/gpt-x")
         with self.assertRaisesRegex(CoderEngineNotImplemented, "not implemented yet"):
             build_coder_command("opencode", LOCAL, "t", [])
-        self.assertEqual(build_coder_command("aider", LOCAL, "t", ["f"])[0], "aider")
+        with patch.dict(os.environ, {"AIDER_BIN": "/opt/aider/bin/aider"}):
+            self.assertEqual(build_coder_command("aider", LOCAL, "t", ["f"])[0], "/opt/aider/bin/aider")
+
+    def test_aider_bin_resolution(self):
+        self.assertEqual(m.resolve_aider_bin({"AIDER_BIN": " /x/aider "}), "/x/aider")
+        with patch.object(m, "AIDER_VENV_BIN", pathlib.Path("/nonexistent/aider")):
+            self.assertEqual(m.resolve_aider_bin({}), "aider")
+        with tempfile.TemporaryDirectory() as d:
+            fake = pathlib.Path(d) / "aider"
+            fake.write_text("")
+            with patch.object(m, "AIDER_VENV_BIN", fake):
+                self.assertEqual(m.resolve_aider_bin({}), str(fake))
 
 
 class TempAppCase(unittest.TestCase):
@@ -278,6 +289,71 @@ class RevertTests(TempAppCase):
             self.assertNotEqual(cmd[:2], ["git", "checkout"])
         self.assertNotIn("checkout", inspect.getsource(m.revert_task))
         self.assertNotIn('"checkout"', pathlib.Path(m.__file__).read_text())
+
+
+@unittest.skipUnless(shutil.which("git"), "git required")
+class ControllerCommitTests(TempAppCase):
+    def git(self, *args):
+        return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                              cwd=self.app, capture_output=True, text=True, check=True)
+
+    def setUp(self):
+        super().setUp()
+        self.git("init")
+        self.git("config", "user.email", "t@t")
+        self.git("config", "user.name", "t")
+        self.git("add", ".")
+        self.git("commit", "-m", "base")
+
+    def test_aider_never_commits_itself(self):
+        cmd = build_aider_command(LOCAL, "do it", ["a.jsx"])
+        self.assertIn("--no-auto-commits", cmd)
+        self.assertIn("--no-dirty-commits", cmd)
+        self.assertIn("--no-show-model-warnings", cmd)
+
+    def test_commit_task_commits_only_the_task_files(self):
+        (self.app / "scratch.txt").write_text("unrelated, uncommitted")
+        snap = snapshot_task_scope()
+        (self.src / "App.jsx").write_text(APP_JSX + "// green\n")
+        (self.src / "new.jsx").write_text("export default 1;\n")
+        note = m.commit_task(snap, "Task 1/1: make it green")
+        self.assertIn("committed 2 file(s)", note)
+        self.assertEqual(self.git("log", "-1", "--format=%s").stdout.strip(), "Task 1/1: make it green")
+        changed = set(self.git("show", "--name-only", "--format=", "HEAD").stdout.split())
+        self.assertEqual(changed, {"src/App.jsx", "src/new.jsx"})
+        self.assertEqual(self.git("status", "--porcelain").stdout.strip(), "?? scratch.txt")
+
+    def test_commit_task_with_no_changes(self):
+        snap = snapshot_task_scope()
+        self.assertEqual(m.commit_task(snap, "Task 1/1: nothing"), "no file changes to commit")
+
+    def test_hygiene_untracks_node_modules_but_keeps_files(self):
+        nm = self.app / "node_modules" / "pkg"
+        nm.mkdir(parents=True)
+        (nm / "index.js").write_text("x")
+        self.git("add", "-f", "node_modules")
+        self.git("commit", "-m", "track node_modules")
+        self.assertEqual(m.ensure_app_repo_hygiene(), "untracked build artifacts")
+        self.assertEqual(self.git("ls-files", "node_modules").stdout.strip(), "")
+        self.assertTrue((nm / "index.js").exists())
+        self.assertIn("node_modules/", (self.app / ".gitignore").read_text())
+        self.assertEqual(m.ensure_app_repo_hygiene(), "")  # idempotent
+
+    def test_successful_run_commits_with_task_title(self):
+        self.make_job(JOB_A, ["make the cube green"])
+        fake = fake_aider(self.src, [{"edit": APP_JSX + "// green\n"}])
+        real_run = subprocess.run
+
+        def run(cmd, **kwargs):
+            if cmd and cmd[0] == "git":
+                return real_run(cmd, **kwargs)
+            return fake(cmd, **kwargs)
+        with patch.object(m.subprocess, "run", run):
+            asyncio.run(run_job(JOB_A))
+        self.assertEqual(jobs[JOB_A]["status"], "done")
+        self.assertEqual(self.git("log", "-1", "--format=%s").stdout.strip(),
+                         "Task 1/1: make the cube green")
+        self.assertIn("committed 1 file(s)", jobs[JOB_A]["task_logs"][0])
 
 
 class RunJobTests(TempAppCase):
