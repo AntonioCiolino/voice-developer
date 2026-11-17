@@ -1,4 +1,5 @@
 import os
+import pathlib
 import re
 
 from controller import config
@@ -6,6 +7,8 @@ from controller.providers import PlannerProvider
 
 
 AIDER_VENV_BIN = config.REPO_ROOT / "controller" / "aider-venv" / "bin" / "aider"
+# Per-model overrides for Aider (e.g. GPT-6 models that only accept the default temperature).
+AIDER_MODEL_SETTINGS = pathlib.Path(__file__).with_name("aider-model-settings.yml")
 
 
 def resolve_aider_bin(env: dict[str, str] | None = None) -> str:
@@ -33,6 +36,7 @@ def build_aider_command(
         # Local models (LM Studio, custom Ollama tags) are unknown to Aider. Its
         # warning asks to open a docs page, and --yes-always would open the browser.
         "--no-show-model-warnings",
+        "--model-settings-file", str(AIDER_MODEL_SETTINGS),
         "--model", provider.aider_model, "--edit-format", edit_format,
         "--message", task_prompt, *files,
     ]

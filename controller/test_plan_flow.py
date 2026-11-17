@@ -345,6 +345,9 @@ class ControllerCommitTests(TempAppCase):
         self.assertIn("--no-auto-commits", cmd)
         self.assertIn("--no-dirty-commits", cmd)
         self.assertIn("--no-show-model-warnings", cmd)
+        settings = pathlib.Path(cmd[cmd.index("--model-settings-file") + 1])
+        self.assertTrue(settings.exists())
+        self.assertIn("- name: gpt-6-luna\n  use_temperature: false", settings.read_text())
 
     def test_commit_task_commits_only_the_task_files(self):
         (self.app / "scratch.txt").write_text("unrelated, uncommitted")
@@ -389,6 +392,48 @@ class ControllerCommitTests(TempAppCase):
         self.assertEqual(self.git("log", "-1", "--format=%s").stdout.strip(),
                          "Task 1/1: make the cube green")
         self.assertIn("committed 1 file(s)", jobs[JOB_A]["task_logs"][0])
+
+
+class NoEditDetectionTests(TempAppCase):
+    """Aider exits 0 even when the model call fails; such a task must not show as done."""
+
+    def test_model_error_with_no_changes_fails_the_task_and_stops(self):
+        self.make_job(JOB_A, ["make balls fall", "t2"])
+        stdout = ("litellm.BadRequestError: OpenAIException - Unsupported value: 'temperature' "
+                  "does not support 0 with this model.")
+        fake = fake_aider(self.src, [{"stdout": stdout}])
+        with patch.object(subprocess, "run", fake):
+            asyncio.run(run_job(JOB_A))
+        job = jobs[JOB_A]
+        self.assertEqual(job["task_statuses"], ["failed", "pending"])
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("made no changes: the model API rejected the request", job["task_errors"][0])
+        self.assertIn("temperature", job["task_errors"][0])
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_search_mismatch_with_no_changes_fails(self):
+        self.make_job(JOB_A, ["t1"])
+        fake = fake_aider(self.src, [{"stdout": "This SEARCH block failed to exactly match lines in src/App.jsx"}])
+        with patch.object(subprocess, "run", fake):
+            asyncio.run(run_job(JOB_A))
+        self.assertIn("SEARCH block did not match", jobs[JOB_A]["task_errors"][0])
+
+    def test_clean_no_change_task_is_still_done(self):
+        # e.g. a "verify the controls still work" task legitimately edits nothing.
+        self.make_job(JOB_A, ["verify the controls still work"])
+        fake = fake_aider(self.src, [{"stdout": "Everything already works; no changes needed."}])
+        with patch.object(subprocess, "run", fake):
+            asyncio.run(run_job(JOB_A))
+        self.assertEqual(jobs[JOB_A]["task_statuses"], ["done"])
+
+    def test_error_text_but_edit_applied_is_done(self):
+        # A first SEARCH block can miss and a retry can still apply the edit.
+        self.make_job(JOB_A, ["t1"])
+        fake = fake_aider(self.src, [{"edit": APP_JSX.replace("hello", "green"),
+                                       "stdout": "SEARCH block failed to exactly match ... Applied edit to src/App.jsx"}])
+        with patch.object(subprocess, "run", fake):
+            asyncio.run(run_job(JOB_A))
+        self.assertEqual(jobs[JOB_A]["task_statuses"], ["done"])
 
 
 class RunJobTests(TempAppCase):

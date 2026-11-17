@@ -1,0 +1,11 @@
+# Aider model settings passed with --model-settings-file on every coder run.
+# The GPT-6 family rejects any temperature except the default (1), and Aider
+# otherwise sends temperature=0, so the first request would fail with a 400.
+- name: gpt-6-luna
+  use_temperature: false
+- name: gpt-6-sol
+  use_temperature: false
+- name: gpt-6.1-sol
+  use_temperature: false
+- name: gpt-6-astra
+  use_temperature: false

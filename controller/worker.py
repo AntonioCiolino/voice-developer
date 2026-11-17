@@ -20,6 +20,7 @@ from controller.providers import (
 )
 from controller.store import save_job
 from controller.workspace import (
+    changed_task_paths,
     commit_task,
     ensure_app_repo_hygiene,
     revert_task,
@@ -30,6 +31,22 @@ from controller.workspace import (
 
 PLAN_CONTEXT_LIMIT = 4000
 LOG_TAIL_LIMIT = 4000
+
+# Aider prints these (and still exits 0) when no edit reached the files.
+_EDIT_FAILURE_MARKERS = (
+    ("BadRequestError", "the model API rejected the request"),
+    ("AuthenticationError", "the model API rejected the credentials"),
+    ("APIConnectionError", "the model server could not be reached"),
+    ("RateLimitError", "the model API rate-limited the request"),
+    ("failed to exactly match", "the model's SEARCH block did not match the file"),
+    ("did not conform to the edit format", "the model's reply was not in the edit format"),
+)
+
+
+def edit_failure_reason(stdout, stderr) -> str:
+    """Return why Aider applied no edit, or "" when its output shows no failure."""
+    output = text_of(stdout) + "\n" + text_of(stderr)
+    return next((reason for marker, reason in _EDIT_FAILURE_MARKERS if marker in output), "")
 
 
 def text_of(value) -> str:
@@ -178,6 +195,12 @@ async def run_job(job_id: str) -> None:
             if len(content) < 100 or 'export default' not in content:
                 _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
                 return
+        unapplied = edit_failure_reason(result.stdout, result.stderr)
+        if unapplied and not changed_task_paths(snapshot):
+            # Aider exits 0 even when the model call fails or no edit applies.
+            _fail_task(job_id, i, snapshot, f"Task {i+1} made no changes: {unapplied}\n"
+                       + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
+            return
         try:
             note = commit_task(snapshot, f"Task {i+1}/{n}: {job['tasks'][i]}"[:200])
         except Exception as exc:
