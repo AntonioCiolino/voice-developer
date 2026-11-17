@@ -1,6 +1,7 @@
 import asyncio
 import os
 import pathlib
+import shutil
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from controller import selection
 from controller.providers import (
     PlannerConfigurationError,
     create_planner_client,
@@ -24,6 +26,25 @@ from controller.routes.planner import get_planner_provider, plan as create_plan
 from controller.schemas import PlanRequest
 from controller.state import jobs
 from controller.ui import PHONE_UI
+
+
+_selection_patch = None
+_selection_tmp = None
+
+
+def setUpModule():
+    """Keep a real controller/model-selection.json from leaking into these tests."""
+    global _selection_patch, _selection_tmp
+    _selection_tmp = tempfile.mkdtemp()
+    _selection_patch = patch.object(
+        selection, "SELECTION_PATH", pathlib.Path(_selection_tmp) / "model-selection.json"
+    )
+    _selection_patch.start()
+
+
+def tearDownModule():
+    _selection_patch.stop()
+    shutil.rmtree(_selection_tmp, True)
 
 
 class PlannerProviderTests(unittest.TestCase):
@@ -98,6 +119,7 @@ class PlannerProviderTests(unittest.TestCase):
             "label": "Ollama / local-only",
             "model": "qwen2.5:7b",
             "endpoint": "http://127.0.0.1:11434/v1",
+            "location": "local",
         })
         self.assertNotIn("secret", str(planner_provider_info(provider)).lower())
 
@@ -117,6 +139,7 @@ class PlannerProviderTests(unittest.TestCase):
             "label": "OpenAI",
             "model": "gpt-test",
             "endpoint": "OpenAI-managed endpoint",
+            "location": "cloud",
         })
         self.assertNotIn("test-secret", str(planner_provider_info(provider)))
 
@@ -197,6 +220,7 @@ class PlannerProviderTests(unittest.TestCase):
                 "label": "Ollama / local-only",
                 "model": "qwen2.5:7b",
                 "endpoint": "http://127.0.0.1:11434/v1",
+                "location": "local",
             })
             self.assertTrue(result["roles"]["local_only"])
 
@@ -255,6 +279,7 @@ class PlannerProviderTests(unittest.TestCase):
                 "label": "Ollama / local-only",
                 "model": "qwen2.5:7b",
                 "endpoint": "http://127.0.0.1:11434/v1",
+                "location": "local",
             })
             self.assertEqual(jobs[result["job_id"]]["provider"], result["provider"])
             self.assertNotIn("OPENAI_API_KEY", str(result))
@@ -359,7 +384,8 @@ class RoleConfigTests(unittest.TestCase):
                 self.assertNotIn("test-secret", str(info))
         info = roles_info(*resolve_roles(CLOUD_LOCAL))
         self.assertEqual(info["planner"], {"role": "planner", "name": "openai", "label": "OpenAI (cloud)",
-                         "model": "gpt-5.4-mini", "endpoint": "OpenAI-managed endpoint"})
+                         "model": "gpt-5.4-mini", "endpoint": "OpenAI-managed endpoint",
+                         "location": "cloud"})
         self.assertEqual(info["coder"]["label"], "Ollama (local)")
         self.assertEqual(info["coder"]["endpoint"], BASE + "/v1")
     def test_route_reports_roles_and_keeps_provider_fields(self):

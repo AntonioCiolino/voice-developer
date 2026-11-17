@@ -20,7 +20,13 @@ class PlannerProvider:
 
     @property
     def is_local(self) -> bool:
+        if self.name == "ollama" and self.model.lower().endswith((":cloud", "-cloud")):
+            return False  # served through the local Ollama server but run in the cloud
         return self.name in LOCAL_PROVIDERS
+
+    @property
+    def location(self) -> str:
+        return "local" if self.is_local else "cloud"
 
     @property
     def planner_base_url(self) -> str | None:
@@ -141,21 +147,29 @@ def _resolve_role(values, provider_var: str, model_var: str, default_provider: s
     return PlannerProvider(name="ollama", model=model, ollama_api_base=api_base)
 
 
+def _values(env: dict[str, str] | None):
+    """The environment to resolve from: the given mapping, else .env plus any saved UI selection."""
+    if env is not None:
+        return env
+    from controller.selection import effective_env  # lazy: selection imports providers
+    return effective_env()
 def resolve_planner_provider(env: dict[str, str] | None = None) -> PlannerProvider:
     """Resolve and validate the explicitly selected planner provider."""
-    values = os.environ if env is None else env
+    values = _values(env)
     return _resolve_role(values, "PLANNER_PROVIDER", "PLANNER_MODEL", "openai")
 
 
 def resolve_coder_provider(env: dict[str, str] | None = None) -> PlannerProvider:
     """Resolve the coder (Aider) provider; it defaults to the planner's provider name."""
-    values = os.environ if env is None else env
+    values = _values(env)
     default = _provider_name(values, "PLANNER_PROVIDER", "openai")
     return _resolve_role(values, "CODER_PROVIDER", "CODER_MODEL", default)
 
 
 def resolve_roles(env: dict[str, str] | None = None) -> tuple[PlannerProvider, PlannerProvider]:
     """Resolve (planner, coder) together so bad coder config fails before any planning."""
+    if env is None:
+        env = _values(None)  # one snapshot so both roles see the same selection
     return resolve_planner_provider(env), resolve_coder_provider(env)
 
 
@@ -175,9 +189,10 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
     if provider.name == "ollama":
         return {
             "name": "ollama",
-            "label": "Ollama / local-only",
+            "label": "Ollama / local-only" if provider.is_local else "Ollama cloud model (via local server)",
             "model": provider.model,
             "endpoint": provider.planner_base_url,
+            "location": provider.location,
         }
     if provider.name == "lmstudio":
         return {
@@ -185,25 +200,28 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
             "label": "LM Studio / local-only",
             "model": provider.model,
             "endpoint": provider.planner_base_url,
+            "location": "local",
         }
     return {
         "name": "openai",
         "label": "OpenAI",
         "model": provider.model,
         "endpoint": "OpenAI-managed endpoint",
+        "location": "cloud",
     }
 
 
 def role_provider_info(role: str, provider: PlannerProvider) -> dict[str, str]:
     """Safe per-role evidence (no keys)."""
     if provider.name == "ollama":
-        label, endpoint = "Ollama (local)", provider.planner_base_url
+        label = "Ollama (local)" if provider.is_local else "Ollama cloud model (via local server)"
+        endpoint = provider.planner_base_url
     elif provider.name == "lmstudio":
         label, endpoint = "LM Studio (local)", provider.planner_base_url
     else:
         label, endpoint = "OpenAI (cloud)", "OpenAI-managed endpoint"
     return {"role": role, "name": provider.name, "label": label,
-            "model": provider.model, "endpoint": endpoint}
+            "model": provider.model, "endpoint": endpoint, "location": provider.location}
 
 
 def roles_info(planner: PlannerProvider, coder: PlannerProvider) -> dict:

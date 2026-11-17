@@ -26,3 +26,6 @@ worker/tasks.log
 .DS_Store
 .aider*
 .env
+
+# Saved UI model selection
+controller/model-selection.json

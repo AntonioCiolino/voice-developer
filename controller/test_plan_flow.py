@@ -17,7 +17,7 @@ import controller.app as app_module
 import controller.routes.planner as planner_routes
 import controller.state as state
 import controller.workspace as workspace
-from controller import config
+from controller import config, selection
 from controller.coder import (
     CoderEngineNotImplemented,
     aider,
@@ -37,6 +37,25 @@ from controller.store import load_jobs, save_job
 from controller.ui import PHONE_UI
 from controller.worker import run_job
 from controller.workspace import revert_task, snapshot_task_scope
+
+_selection_patch = None
+_selection_tmp = None
+
+
+def setUpModule():
+    """Keep a real controller/model-selection.json from leaking into these tests."""
+    global _selection_patch, _selection_tmp
+    _selection_tmp = tempfile.mkdtemp()
+    _selection_patch = patch.object(
+        selection, "SELECTION_PATH", pathlib.Path(_selection_tmp) / "model-selection.json"
+    )
+    _selection_patch.start()
+
+
+def tearDownModule():
+    _selection_patch.stop()
+    shutil.rmtree(_selection_tmp, True)
+
 
 CONTROLLER_DIR = pathlib.Path(__file__).parent
 

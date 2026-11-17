@@ -12,3 +12,13 @@ class PlanRequest(BaseModel):
 
 class LoadAppRequest(BaseModel):
     name: str
+
+
+class RoleSelection(BaseModel):
+    provider: str
+    model: str
+
+
+class ModelConfigRequest(BaseModel):
+    planner: RoleSelection | None = None
+    coder: RoleSelection | None = None

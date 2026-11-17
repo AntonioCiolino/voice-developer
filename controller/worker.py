@@ -11,7 +11,13 @@ from controller.coder import (
     resolve_coder_engine,
     resolve_coder_timeout,
 )
-from controller.providers import PlannerConfigurationError, provider_environment, resolve_roles
+from controller.providers import (
+    PlannerConfigurationError,
+    provider_environment,
+    resolve_roles,
+    role_provider_info,
+    roles_info,
+)
 from controller.store import save_job
 from controller.workspace import (
     commit_task,
@@ -77,6 +83,18 @@ def _fail_task(job_id: str, i: int, snapshot: dict | None, message: str) -> None
     save_job(job_id)
 
 
+def _record_coder(job: dict, planner, coder) -> None:
+    """Store the coder this run actually uses (resolved once, at run start)."""
+    roles = job.get('roles')
+    if not isinstance(roles, dict) or not isinstance(roles.get('planner'), dict):
+        job['roles'] = roles_info(planner, coder)
+        return
+    roles['coder'] = role_provider_info('coder', coder)
+    planned = roles['planner']
+    planner_local = planned.get('location') == 'local' if 'location' in planned else planner.is_local
+    roles['local_only'] = planner_local and coder.is_local
+
+
 async def run_job(job_id: str) -> None:
     job = state.jobs[job_id]
     n = len(job['tasks'])
@@ -84,7 +102,7 @@ async def run_job(job_id: str) -> None:
     job['status'] = 'running'
     job['error'] = None
     try:
-        _, provider = resolve_roles()
+        planner, provider = resolve_roles()
         engine = resolve_coder_engine()
         timeout = resolve_coder_timeout()
         edit_format = resolve_coder_edit_format()
@@ -94,6 +112,7 @@ async def run_job(job_id: str) -> None:
         save_job(job_id)
         return
     job['engine'] = engine
+    _record_coder(job, planner, provider)
     save_job(job_id)
     try:
         ensure_app_repo_hygiene()
