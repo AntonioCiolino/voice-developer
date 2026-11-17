@@ -10,6 +10,12 @@ class PlannerConfigurationError(ValueError):
     """Raised when the selected planner provider is not configured."""
 
 
+# Ollama tags found (by discovery) to run in Ollama's cloud even though their names
+# carry no :cloud suffix, e.g. a model created FROM a cloud model. Updated on each
+# discovery of the Ollama server.
+OLLAMA_REMOTE_MODELS: set[str] = set()
+
+
 @dataclass(frozen=True)
 class PlannerProvider:
     name: str
@@ -20,7 +26,9 @@ class PlannerProvider:
 
     @property
     def is_local(self) -> bool:
-        if self.name == "ollama" and self.model.lower().endswith((":cloud", "-cloud")):
+        if self.name == "ollama" and (
+            self.model.lower().endswith((":cloud", "-cloud")) or self.model in OLLAMA_REMOTE_MODELS
+        ):
             return False  # served through the local Ollama server but run in the cloud
         return self.name in LOCAL_PROVIDERS
 

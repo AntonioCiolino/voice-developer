@@ -70,6 +70,8 @@ class ModelConfigCase(unittest.TestCase):
             self.addCleanup(p.stop)
         self.before = dict(jobs)
         self.addCleanup(lambda: (jobs.clear(), jobs.update(self.before)))
+        discovery.OLLAMA_REMOTE_MODELS.clear()
+        self.addCleanup(discovery.OLLAMA_REMOTE_MODELS.clear)
 
     def raises(self, status, request):
         with self.assertRaises(HTTPException) as ctx:
@@ -151,6 +153,31 @@ class DiscoveryTests(ModelConfigCase):
             entry = self.by_name()["ollama"]
         self.assertFalse(entry["available"])
         self.assertNotIn("cloud.example", json.dumps(entry))
+
+    def test_ollama_cloud_stub_without_suffix_is_labeled_cloud(self):
+        tags = {"models": [
+            {"name": "coder-env:7b", "size": 4_683_087_561},
+            {"name": "qwen3-coder:480b-cloud", "size": 382, "remote_host": "https://ollama.com:443"},
+            {"name": "qwen3-coder-480b-64k:latest", "size": 259},  # created FROM a cloud model
+            {"name": "remote-only", "remote_host": "https://ollama.com:443"},
+        ]}
+        with patch.object(discovery, "_get_json", side_effect=lambda url: tags if ":11434" in url else LMSTUDIO_TAGS):
+            found = {m["id"]: m["location"] for m in self.by_name()["ollama"]["models"]}
+        self.assertEqual(found, {"coder-env:7b": "local", "qwen3-coder:480b-cloud": "cloud",
+                                 "qwen3-coder-480b-64k:latest": "cloud", "remote-only": "cloud"})
+        coder = resolve_coder_provider({**BASE_ENV, "OLLAMA_MODEL": "qwen3-coder-480b-64k:latest"})
+        self.assertFalse(coder.is_local)
+        self.assertEqual(coder.location, "cloud")
+
+    def test_openai_list_only_takes_role_models_from_openai_roles(self):
+        # The lmstudio PLANNER_MODEL and ollama CODER_MODEL must not appear as OpenAI models.
+        with patch.dict(os.environ, {"PLANNER_MODEL": "qwen-env", "CODER_MODEL": "coder-env:7b"}):
+            ids = [m["id"] for m in self.by_name()["openai"]["models"]]
+        self.assertEqual(ids, ["gpt-5.4-mini", "gpt-5.4"])
+        with patch.dict(os.environ, {"PLANNER_PROVIDER": "openai", "PLANNER_MODEL": "gpt-6",
+                                     "CODER_PROVIDER": "lmstudio", "CODER_MODEL": "qwen-env"}):
+            ids = [m["id"] for m in self.by_name()["openai"]["models"]]
+        self.assertEqual(ids, ["gpt-5.4-mini", "gpt-5.4", "gpt-6"])
 
     def test_openai_needs_key(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):

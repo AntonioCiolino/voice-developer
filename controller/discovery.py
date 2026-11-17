@@ -2,9 +2,11 @@ import os
 
 import httpx
 
-from controller.providers import PlannerConfigurationError, _normalize_ollama_api_base
+from controller.providers import OLLAMA_REMOTE_MODELS, PlannerConfigurationError, _normalize_ollama_api_base
 
 TIMEOUT_SECONDS = 2
+# Real model weights are at least tens of megabytes; cloud stubs are under 1 KB.
+LOCAL_WEIGHTS_MIN_BYTES = 1_000_000
 
 _LABELS = {"lmstudio": "LM Studio", "ollama": "Ollama", "openai": "OpenAI"}
 
@@ -22,6 +24,20 @@ def _entry(name: str, models=None, error: str | None = None) -> dict:
 
 def _model(model_id: str, cloud: bool) -> dict:
     return {"id": model_id, "label": model_id, "location": "cloud" if cloud else "local"}
+
+
+def _ollama_runs_remotely(entry: dict) -> bool:
+    """True when an Ollama tag runs in Ollama's cloud rather than on this machine.
+
+    Ollama marks pulled cloud models with remote_host, but a model created FROM one
+    (for example to change num_ctx) loses that marker and the :cloud suffix. Its
+    manifest is still only a few hundred bytes, since no weights are stored locally.
+    """
+    name = entry["name"].lower()
+    if name.endswith((":cloud", "-cloud")) or entry.get("remote_host"):
+        return True
+    size = entry.get("size")
+    return isinstance(size, int) and size < LOCAL_WEIGHTS_MIN_BYTES
 
 
 def _get_json(url: str):
@@ -42,8 +58,10 @@ def _discover_local(name: str, base_var: str, default_base: str, path: str) -> d
             ids = [m["id"] for m in data["data"] if isinstance(m.get("id"), str) and "embed" not in m["id"].lower()]
             models = [_model(i, False) for i in ids]
         else:
-            ids = [m["name"] for m in data["models"] if isinstance(m.get("name"), str)]
-            models = [_model(i, i.lower().endswith((":cloud", "-cloud"))) for i in ids]
+            entries = [m for m in data["models"] if isinstance(m.get("name"), str)]
+            models = [_model(m["name"], _ollama_runs_remotely(m)) for m in entries]
+            OLLAMA_REMOTE_MODELS.clear()
+            OLLAMA_REMOTE_MODELS.update(m["id"] for m in models if m["location"] == "cloud")
     except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
         return _entry(name, error=f"{label} server is not reachable")
     return _entry(name, models=models)
@@ -54,9 +72,15 @@ def _discover_openai() -> dict:
         return _entry("openai", error="OPENAI_API_KEY is not set")
     candidates = os.environ.get("OPENAI_MODELS", "").split(",") + [
         os.environ.get("OPENAI_MODEL", "").strip() or "gpt-5.4-mini",
-        os.environ.get("PLANNER_MODEL", ""),
-        os.environ.get("CODER_MODEL", ""),
     ]
+    # A role's model only belongs in the OpenAI list when .env runs that role on OpenAI;
+    # otherwise e.g. an LM Studio CODER_MODEL would be offered as an OpenAI model.
+    planner_provider = os.environ.get("PLANNER_PROVIDER", "").strip().lower() or "openai"
+    coder_provider = os.environ.get("CODER_PROVIDER", "").strip().lower() or planner_provider
+    if planner_provider == "openai":
+        candidates.append(os.environ.get("PLANNER_MODEL", ""))
+    if coder_provider == "openai":
+        candidates.append(os.environ.get("CODER_MODEL", ""))
     ids = list(dict.fromkeys(c.strip() for c in candidates if c.strip()))
     return _entry("openai", models=[_model(i, True) for i in ids])
 
