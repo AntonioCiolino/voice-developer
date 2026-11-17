@@ -471,6 +471,26 @@ class NoEditDetectionTests(TempAppCase):
             asyncio.run(run_job(JOB_A))
         self.assertEqual(jobs[JOB_A]["task_statuses"], ["done"])
 
+    def test_partial_edit_after_aider_gives_up_is_failed_and_reverted(self):
+        self.make_job(JOB_A, ["spawn balls", "t2"])
+        fake = fake_aider(self.src, [{"edit": APP_JSX.replace("hello", "half done"),
+                                       "stdout": "Applied edit to src/App.jsx\n"
+                                                 "SEARCH block failed to exactly match lines in src/App.jsx\n"
+                                                 "Only 3 reflections allowed, stopping."}])
+        with patch.object(subprocess, "run", fake):
+            asyncio.run(run_job(JOB_A))
+        job = jobs[JOB_A]
+        self.assertEqual(job["task_statuses"], ["failed", "pending"])
+        self.assertIn("only partly applied", job["task_errors"][0])
+        self.assertEqual((self.src / "App.jsx").read_text(), APP_JSX)  # half edit reverted
+
+    def test_prompt_forbids_placeholders_in_search_blocks(self):
+        from controller.worker import build_task_prompt
+        self.make_job(JOB_A, ["t1"])
+        prompt = build_task_prompt(jobs[JOB_A], 0)
+        self.assertIn("Never write '...'", prompt)
+        self.assertIn("Keep each SEARCH block short", prompt)
+
     def test_error_text_but_edit_applied_is_done(self):
         # A first SEARCH block can miss and a retry can still apply the edit.
         self.make_job(JOB_A, ["t1"])

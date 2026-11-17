@@ -108,6 +108,10 @@ async def run_coder_streaming(job_id: str, i: int, command: list[str], provider,
     return subprocess.CompletedProcess(command, result.returncode, stdout, stderr)
 
 
+# Aider prints this when it gives up re-asking the model to fix edits that did not apply.
+_GAVE_UP_MARKER = "reflections allowed, stopping"
+
+
 def edit_failure_reason(stdout, stderr) -> str:
     """Return why Aider applied no edit, or "" when its output shows no failure."""
     output = text_of(stdout) + "\n" + text_of(stderr)
@@ -153,6 +157,10 @@ def build_task_prompt(job: dict, i: int) -> str:
         + "- Keep all existing code, names, formatting and behavior that the task does not require changing. "
         + "Do not refactor, reorder or reformat.\n"
         + "- Copy each SEARCH block exactly from the current file, including indentation.\n"
+        + "- Never write '...' or any placeholder inside a SEARCH block; it must contain only real "
+        + "lines from the file.\n"
+        + "- Keep each SEARCH block short: just the few lines being changed plus a line or two around them. "
+        + "Use several small blocks rather than one large one.\n"
         + "- Do not ask clarifying questions or request additional files; use the files provided."
     )
 
@@ -263,6 +271,13 @@ async def run_job(job_id: str) -> None:
             if len(content) < 100 or 'export default' not in content:
                 _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
                 return
+        if _GAVE_UP_MARKER in text_of(result.stdout) + text_of(result.stderr):
+            # Some SEARCH blocks may have applied, but Aider stopped retrying the rest,
+            # so the edit is incomplete. Revert it rather than leave half a change.
+            _fail_task(job_id, i, snapshot, f"Task {i+1} was only partly applied: Aider stopped after "
+                       "repeated SEARCH blocks that did not match the file. Its changes were reverted.\n"
+                       + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
+            return
         unapplied = edit_failure_reason(result.stdout, result.stderr)
         if unapplied and not changed_task_paths(snapshot):
             # Aider exits 0 even when the model call fails or no edit applies.
