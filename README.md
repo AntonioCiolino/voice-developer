@@ -152,6 +152,16 @@ The authenticated `/status` endpoint is available at port `8040`, but the contro
 | Local filesystem | The active app lives in `generated-app/`. Saved snapshots live in `saved-apps/`, which Git ignores because they belong to each local workspace. Copy that folder separately to back up or move your saved apps. Plans and their task status are saved as JSON in `plans/` (Git ignored) so they survive a controller restart. |
 
 Each clone has one active workspace. Browser tabs connected to the same controller see the same app and job queue. The controller runs its own queue worker, so you can use the app without starting the separate CLI utilities in `worker/`.
+### Code layout
+
+`controller/main.py` is only the entry point (`uvicorn main:app --app-dir controller`). The code lives in the `controller` package:
+
+- `app.py`: FastAPI app, startup, and router registration. `routes/` holds the endpoints (`ui`, `auth`, `system`, `apps`, `planner`, `jobs`).
+- `auth.py`: Google sign-in session helpers, the local-auth and LAN checks, and startup auth validation.
+- `providers.py`: planner and coder provider settings, loopback checks, and per-role subprocess environments.
+- `coder/`: one module per coder engine (`aider.py`, `opencode.py`) with shared settings in `base.py`. A new engine is a new module here plus one name in `coder/base.py`, and one branch in `coder/__init__.py`.
+- `planning.py`, `store.py`, `workspace.py`, `worker.py`: plan parsing and prompts, `plans/<id>.json` persistence, per-task snapshot/revert/commit, and the job worker.
+- `config.py` (paths, `.env`), `state.py` (in-memory jobs and queue), `ui.py` with `templates/phone.html` (the phone page).
 
 ## Planner and coder models
 Plan uses two independently configured roles, set only in `controller/.env` (there is no UI setting):
@@ -237,7 +247,6 @@ To test only the local planning request without calling `/plan`, enqueueing a jo
 
 ```sh
 (
-  cd controller
   env -u OPENAI_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_BASE \
     -u AZURE_OPENAI_API_KEY -u AZURE_OPENAI_ENDPOINT -u AZURE_OPENAI_BASE_URL \
     -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL \
@@ -256,8 +265,8 @@ To test only the local planning request without calling `/plan`, enqueueing a jo
     PLANNER_PROVIDER=ollama \
     OLLAMA_MODEL=qwen2.5:7b \
     OLLAMA_API_BASE=http://127.0.0.1:11434 \
-    ./venv/bin/python - <<'PY'
-from main import create_planner_client, planner_provider_info, resolve_planner_provider
+    controller/venv/bin/python - <<'PY'
+from controller.providers import create_planner_client, planner_provider_info, resolve_planner_provider
 
 provider = resolve_planner_provider()
 print("PROVIDER_EVIDENCE", planner_provider_info(provider))

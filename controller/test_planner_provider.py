@@ -8,14 +8,9 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from controller.main import (
-    PlanRequest,
+from controller.providers import (
     PlannerConfigurationError,
-    build_aider_command,
     create_planner_client,
-    get_planner_provider,
-    jobs,
-    plan as create_plan,
     planner_provider_info,
     provider_environment,
     resolve_coder_provider,
@@ -23,8 +18,12 @@ from controller.main import (
     resolve_roles,
     role_provider_info,
     roles_info,
-    PHONE_UI,
 )
+from controller.coder import build_aider_command
+from controller.routes.planner import get_planner_provider, plan as create_plan
+from controller.schemas import PlanRequest
+from controller.state import jobs
+from controller.ui import PHONE_UI
 
 
 class PlannerProviderTests(unittest.TestCase):
@@ -243,10 +242,10 @@ class PlannerProviderTests(unittest.TestCase):
                 "OLLAMA_MODEL": "qwen2.5:7b",
                 "OLLAMA_API_BASE": "http://127.0.0.1:11434",
             }, clear=True),
-            patch("controller.main.create_planner_client", return_value=fake_client),
-            patch("controller.main._planner_user_msg", return_value="harmless prompt"),
-            patch("controller.main.job_queue", queue),
-            patch("controller.main.PLANS_DIR", pathlib.Path(tmp.name)),
+            patch("controller.routes.planner.create_planner_client", return_value=fake_client),
+            patch("controller.routes.planner.planner_user_msg", return_value="harmless prompt"),
+            patch("controller.state.job_queue", queue),
+            patch("controller.config.PLANS_DIR", pathlib.Path(tmp.name)),
         ):
             result = asyncio.run(create_plan(PlanRequest(prompt="harmless prompt")))
 

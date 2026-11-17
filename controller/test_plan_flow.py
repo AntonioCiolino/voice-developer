@@ -13,27 +13,43 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-import controller.main as m
-from controller.main import (
+import controller.app as app_module
+import controller.routes.planner as planner_routes
+import controller.state as state
+import controller.workspace as workspace
+from controller import config
+from controller.coder import (
     CoderEngineNotImplemented,
-    PlannerConfigurationError,
-    PlannerProvider,
+    aider,
     build_aider_command,
     build_coder_command,
     build_opencode_command,
-    continue_plan,
-    execute_job,
-    jobs,
-    load_jobs,
-    parse_tasks,
     resolve_coder_edit_format,
     resolve_coder_engine,
     resolve_coder_timeout,
-    revert_task,
-    run_job,
-    save_job,
-    snapshot_task_scope,
 )
+from controller.planning import parse_tasks
+from controller.providers import PlannerConfigurationError, PlannerProvider
+from controller.routes.jobs import continue_plan, execute_job
+from controller.schemas import PlanRequest
+from controller.state import jobs
+from controller.store import load_jobs, save_job
+from controller.ui import PHONE_UI
+from controller.worker import run_job
+from controller.workspace import revert_task, snapshot_task_scope
+
+CONTROLLER_DIR = pathlib.Path(__file__).parent
+
+
+def controller_source() -> str:
+    """Source of every non-test controller module plus the UI template (never the venvs)."""
+    files = [
+        f
+        for pattern in ("*.py", "coder/*.py", "routes/*.py", "templates/*.html")
+        for f in sorted(CONTROLLER_DIR.glob(pattern))
+        if not f.name.startswith("test_")
+    ]
+    return "\n".join(f.read_text() for f in files)
 
 LOCAL = PlannerProvider(name="ollama", model="qwen2.5-coder:7b", ollama_api_base="http://127.0.0.1:11434")
 OLLAMA_ENV = {"PLANNER_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen2.5:7b",
@@ -125,14 +141,14 @@ class CoderConfigTests(unittest.TestCase):
             self.assertEqual(build_coder_command("aider", LOCAL, "t", ["f"])[0], "/opt/aider/bin/aider")
 
     def test_aider_bin_resolution(self):
-        self.assertEqual(m.resolve_aider_bin({"AIDER_BIN": " /x/aider "}), "/x/aider")
-        with patch.object(m, "AIDER_VENV_BIN", pathlib.Path("/nonexistent/aider")):
-            self.assertEqual(m.resolve_aider_bin({}), "aider")
+        self.assertEqual(aider.resolve_aider_bin({"AIDER_BIN": " /x/aider "}), "/x/aider")
+        with patch.object(aider, "AIDER_VENV_BIN", pathlib.Path("/nonexistent/aider")):
+            self.assertEqual(aider.resolve_aider_bin({}), "aider")
         with tempfile.TemporaryDirectory() as d:
             fake = pathlib.Path(d) / "aider"
             fake.write_text("")
-            with patch.object(m, "AIDER_VENV_BIN", fake):
-                self.assertEqual(m.resolve_aider_bin({}), str(fake))
+            with patch.object(aider, "AIDER_VENV_BIN", fake):
+                self.assertEqual(aider.resolve_aider_bin({}), str(fake))
 
 
 class TempAppCase(unittest.TestCase):
@@ -151,7 +167,7 @@ class TempAppCase(unittest.TestCase):
         self.plans = self.tmp / "plans"
         for name, value in (("REPO_ROOT", self.root), ("APP_ROOT", self.app),
                             ("APP_SRC", self.src), ("PLANS_DIR", self.plans)):
-            p = patch.object(m, name, value)
+            p = patch.object(config, name, value)
             p.start()
             self.addCleanup(p.stop)
         env = patch.dict(os.environ, OLLAMA_ENV, clear=True)
@@ -234,9 +250,9 @@ class PersistenceTests(TempAppCase):
         fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
             create=lambda **kw: SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=USER_OUTPUT))]))))
         q = Q()
-        with patch.object(m, "create_planner_client", return_value=fake_client), \
-                patch.object(m, "_planner_user_msg", return_value="x"), patch.object(m, "job_queue", q):
-            result = asyncio.run(m.plan(m.PlanRequest(prompt="cube green")))
+        with patch.object(planner_routes, "create_planner_client", return_value=fake_client), \
+                patch.object(planner_routes, "planner_user_msg", return_value="x"), patch.object(state, "job_queue", q):
+            result = asyncio.run(planner_routes.plan(PlanRequest(prompt="cube green")))
         self.assertEqual(result["status"], "planned")
         self.assertEqual(len(result["tasks"]), 1)
         self.assertEqual(q.items, [])
@@ -283,12 +299,12 @@ class RevertTests(TempAppCase):
     def test_never_uses_checkout_everything(self):
         self.make_job(JOB_A, ["t1"])
         fake = fake_aider(self.src, [{"rc": 1, "stderr": "boom", "edit": "x"}])
-        with patch.object(m.subprocess, "run", fake):
+        with patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         for cmd, _ in fake.calls:
             self.assertNotEqual(cmd[:2], ["git", "checkout"])
-        self.assertNotIn("checkout", inspect.getsource(m.revert_task))
-        self.assertNotIn('"checkout"', pathlib.Path(m.__file__).read_text())
+        self.assertNotIn("checkout", inspect.getsource(revert_task))
+        self.assertNotIn('"checkout"', controller_source())
 
 
 @unittest.skipUnless(shutil.which("git"), "git required")
@@ -316,7 +332,7 @@ class ControllerCommitTests(TempAppCase):
         snap = snapshot_task_scope()
         (self.src / "App.jsx").write_text(APP_JSX + "// green\n")
         (self.src / "new.jsx").write_text("export default 1;\n")
-        note = m.commit_task(snap, "Task 1/1: make it green")
+        note = workspace.commit_task(snap, "Task 1/1: make it green")
         self.assertIn("committed 2 file(s)", note)
         self.assertEqual(self.git("log", "-1", "--format=%s").stdout.strip(), "Task 1/1: make it green")
         changed = set(self.git("show", "--name-only", "--format=", "HEAD").stdout.split())
@@ -325,7 +341,7 @@ class ControllerCommitTests(TempAppCase):
 
     def test_commit_task_with_no_changes(self):
         snap = snapshot_task_scope()
-        self.assertEqual(m.commit_task(snap, "Task 1/1: nothing"), "no file changes to commit")
+        self.assertEqual(workspace.commit_task(snap, "Task 1/1: nothing"), "no file changes to commit")
 
     def test_hygiene_untracks_node_modules_but_keeps_files(self):
         nm = self.app / "node_modules" / "pkg"
@@ -333,11 +349,11 @@ class ControllerCommitTests(TempAppCase):
         (nm / "index.js").write_text("x")
         self.git("add", "-f", "node_modules")
         self.git("commit", "-m", "track node_modules")
-        self.assertEqual(m.ensure_app_repo_hygiene(), "untracked build artifacts")
+        self.assertEqual(workspace.ensure_app_repo_hygiene(), "untracked build artifacts")
         self.assertEqual(self.git("ls-files", "node_modules").stdout.strip(), "")
         self.assertTrue((nm / "index.js").exists())
         self.assertIn("node_modules/", (self.app / ".gitignore").read_text())
-        self.assertEqual(m.ensure_app_repo_hygiene(), "")  # idempotent
+        self.assertEqual(workspace.ensure_app_repo_hygiene(), "")  # idempotent
 
     def test_successful_run_commits_with_task_title(self):
         self.make_job(JOB_A, ["make the cube green"])
@@ -348,7 +364,7 @@ class ControllerCommitTests(TempAppCase):
             if cmd and cmd[0] == "git":
                 return real_run(cmd, **kwargs)
             return fake(cmd, **kwargs)
-        with patch.object(m.subprocess, "run", run):
+        with patch.object(subprocess, "run", run):
             asyncio.run(run_job(JOB_A))
         self.assertEqual(jobs[JOB_A]["status"], "done")
         self.assertEqual(self.git("log", "-1", "--format=%s").stdout.strip(),
@@ -360,7 +376,7 @@ class RunJobTests(TempAppCase):
     def test_aider_command_flags_and_timeout(self):
         self.make_job(JOB_A, ["t1"])
         fake = fake_aider(self.src, [{}])
-        with patch.object(m.subprocess, "run", fake):
+        with patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         cmd, kwargs = fake.calls[0]
         self.assertEqual(cmd[cmd.index("--edit-format") + 1], "diff")
@@ -372,7 +388,7 @@ class RunJobTests(TempAppCase):
         self.make_job(JOB_A, ["t1"])
         fake = fake_aider(self.src, [{}])
         with patch.dict(os.environ, {"CODER_TIMEOUT_SECONDS": "45", "CODER_EDIT_FORMAT": "udiff"}), \
-                patch.object(m.subprocess, "run", fake):
+                patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         cmd, kwargs = fake.calls[0]
         self.assertEqual(kwargs["timeout"], 45)
@@ -385,7 +401,7 @@ class RunJobTests(TempAppCase):
             {"edit": edited, "stdout": "ok"},
             {"edit": "garbage", "new_file": "extra.jsx", "rc": 1, "stderr": "aider exploded", "stdout": "last words"},
         ])
-        with patch.object(m.subprocess, "run", fake):
+        with patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         job = jobs[JOB_A]
         self.assertEqual(job["task_statuses"], ["done", "failed", "pending"])
@@ -405,7 +421,7 @@ class RunJobTests(TempAppCase):
             with self.subTest(partial=partial):
                 self.make_job(JOB_A, ["t1"])
                 fake = fake_aider(self.src, [{"timeout": True, "stderr": partial, "edit": "half written"}])
-                with patch.dict(os.environ, {"CODER_TIMEOUT_SECONDS": "7"}), patch.object(m.subprocess, "run", fake):
+                with patch.dict(os.environ, {"CODER_TIMEOUT_SECONDS": "7"}), patch.object(subprocess, "run", fake):
                     asyncio.run(run_job(JOB_A))
                 job = jobs[JOB_A]
                 self.assertEqual(job["task_statuses"], ["failed"])
@@ -416,7 +432,7 @@ class RunJobTests(TempAppCase):
     def test_resume_skips_done_tasks(self):
         self.make_job(JOB_A, ["t1", "t2", "t3"], ["done", "failed", "pending"], status="failed")
         fake = fake_aider(self.src, [{}, {}])
-        with patch.object(m.subprocess, "run", fake):
+        with patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         self.assertEqual(len(fake.calls), 2)
         prompts = [c[0][c[0].index("--message") + 1] for c in fake.calls]
@@ -429,7 +445,7 @@ class RunJobTests(TempAppCase):
     def test_corrupted_app_jsx_is_restored(self):
         self.make_job(JOB_A, ["t1"])
         fake = fake_aider(self.src, [{"edit": "tiny"}])
-        with patch.object(m.subprocess, "run", fake):
+        with patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         self.assertEqual(jobs[JOB_A]["task_statuses"], ["failed"])
         self.assertIn("corrupted App.jsx", jobs[JOB_A]["error"])
@@ -438,7 +454,7 @@ class RunJobTests(TempAppCase):
     def test_opencode_stub_fails_clearly_without_running_anything(self):
         self.make_job(JOB_A, ["t1"])
         with patch.dict(os.environ, {"CODER_ENGINE": "opencode"}), \
-                patch.object(m.subprocess, "run") as run:
+                patch.object(subprocess, "run") as run:
             asyncio.run(run_job(JOB_A))
         run.assert_not_called()
         self.assertEqual(jobs[JOB_A]["status"], "failed")
@@ -447,7 +463,7 @@ class RunJobTests(TempAppCase):
 
     def test_bad_coder_config_fails_job(self):
         self.make_job(JOB_A, ["t1"])
-        with patch.dict(os.environ, {"CODER_TIMEOUT_SECONDS": "nope"}), patch.object(m.subprocess, "run") as run:
+        with patch.dict(os.environ, {"CODER_TIMEOUT_SECONDS": "nope"}), patch.object(subprocess, "run") as run:
             asyncio.run(run_job(JOB_A))
         run.assert_not_called()
         self.assertIn("CODER_TIMEOUT_SECONDS", jobs[JOB_A]["error"])
@@ -465,7 +481,7 @@ class EndpointTests(TempAppCase):
     def setUp(self):
         super().setUp()
         self.queue = FakeQueue()
-        p = patch.object(m, "job_queue", self.queue)
+        p = patch.object(state, "job_queue", self.queue)
         p.start()
         self.addCleanup(p.stop)
 
@@ -529,8 +545,8 @@ class EndpointTests(TempAppCase):
         self.assertEqual(jobs[JOB_A]["status"], "planned")
 
     def test_generate_route_and_anthropic_are_gone(self):
-        self.assertNotIn("/generate", [r.path for r in m.app.routes])
-        source = pathlib.Path(m.__file__).read_text()
+        self.assertNotIn("/generate", [r.path for r in app_module.app.routes])
+        source = controller_source()
         self.assertNotIn("ANTHROPIC", source)
         self.assertNotIn("claude-sonnet", source)
 
@@ -539,14 +555,14 @@ class UiTests(unittest.TestCase):
     def test_ui_strings(self):
         for needle in ("AUTO_START_SECONDS = 5", "/job/${", "/continue", "Continue plan",
                        "task_errors", "cancelCountdown", "click to cancel"):
-            self.assertIn(needle, m.PHONE_UI)
+            self.assertIn(needle, PHONE_UI)
         for needle in ("/generate", "claude-sonnet", "Generate"):
-            self.assertNotIn(needle, m.PHONE_UI.replace("Generated app", "").replace("generated app", "")
+            self.assertNotIn(needle, PHONE_UI.replace("Generated app", "").replace("generated app", "")
                              .replace("generated-app", ""))
 
     @unittest.skipUnless(shutil.which("node"), "node required")
     def test_script_is_valid_javascript(self):
-        script = re.search(r"<script>(.*)</script>", m.PHONE_UI, re.S).group(1)
+        script = re.search(r"<script>(.*)</script>", PHONE_UI, re.S).group(1)
         with tempfile.TemporaryDirectory() as d:
             path = pathlib.Path(d) / "ui.js"
             path.write_text(script)
