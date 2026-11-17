@@ -628,12 +628,40 @@ PHONE_UI = """<!doctype html>
       logModalTrigger = null;
     }
 
+    function getModalFocusableElements(modal) {
+      return [...modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter(element => !element.disabled && element.offsetParent !== null);
+    }
+
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      if (document.getElementById('helpModal').classList.contains('open')) {
-        closeHelpModal();
-      } else if (document.getElementById('logModal').classList.contains('open')) {
-        closeLogModal();
+      const openModal = [
+        document.getElementById('helpModal'),
+        document.getElementById('logModal'),
+      ].find(modal => modal.classList.contains('open'));
+      if (!openModal) return;
+
+      if (event.key === 'Escape') {
+        if (openModal.id === 'helpModal') closeHelpModal();
+        else closeLogModal();
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+      const focusable = getModalFocusableElements(openModal);
+      if (!focusable.length) {
+        event.preventDefault();
+        openModal.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !openModal.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !openModal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
       }
     });
 
