@@ -216,34 +216,13 @@ def new_app():
             elif f.is_dir():
                 shutil.rmtree(f)
 
-        # Create fresh main.jsx
-        main_jsx = config.APP_SRC / "main.jsx"
-        main_jsx.write_text("""import React, { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import App from "./App.jsx";
-
-createRoot(document.getElementById("root")).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
-""")
-
-        # Create blank App.jsx
-        app_jsx = config.APP_SRC / "App.jsx"
-        app_jsx.write_text("""import React from "react";
-
-export default function App() {
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">New App</h1>
-        <p className="text-gray-600">Ready to build...</p>
-      </div>
-    </div>
-  );
-}
-""")
+        # The blank app's src/ from app-template/ (also what setup.sh starts a fresh clone with).
+        # index.html, package.json and vite.config.js are left as they are, as before.
+        for f in sorted((config.APP_TEMPLATE / "src").rglob("*")):
+            if f.is_file():
+                dest = config.APP_SRC / f.relative_to(config.APP_TEMPLATE / "src")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dest)
 
         # Ensure npm dependencies are installed
         subprocess.run(

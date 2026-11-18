@@ -7,11 +7,10 @@ controller/aider-venv/
 controller/.env
 controller/.env.backups/
 
+# The current app: its own git repo, created from app-template/ by setup.sh
+generated-app/
 # Node
-generated-app/node_modules/
-generated-app/dist/
-generated-app/.vite/
-generated-app/package-lock.json
+app-template/node_modules/
 controller/lint-tools/node_modules/
 
 # Saved app snapshots
