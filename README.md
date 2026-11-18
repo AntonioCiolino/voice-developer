@@ -70,13 +70,13 @@ Register that exact URI in the Google OAuth client when you use the controller f
 
 ### Mac access from a phone on the same network
 
-Local authentication remains loopback-only unless you explicitly opt in to LAN mode. The Mac's LAN address for this setup is `192.168.5.33`, and `r2m2.local` resolves to that address. With `VOICE_DEVELOPER_LOCAL_AUTH=1` already set in `controller/.env`, stop any existing instance and run:
+Local authentication remains loopback-only unless you explicitly opt in to LAN mode. `r2m2.local` always resolves to the Mac's current address, so the phone never needs an IP. In LAN mode `start.sh` finds the Mac's private LAN address itself on every start (the first of `en0`-`en5` that has one), because the router can hand out a new address. `./start.sh --detect-host` prints the address it would use. With `VOICE_DEVELOPER_LOCAL_AUTH=1` already set in `controller/.env`, stop any existing instance and run:
 
 ```sh
-VOICE_DEVELOPER_HOST=192.168.5.33 VOICE_DEVELOPER_LOCAL_AUTH_LAN=1 ./start.sh
+VOICE_DEVELOPER_LOCAL_AUTH_LAN=1 ./start.sh
 ```
 
-The phone can then open [http://r2m2.local:8040](http://r2m2.local:8040), and the preview is available at [http://r2m2.local:5773](http://r2m2.local:5773). The LAN opt-in is accepted only with `VOICE_DEVELOPER_HOST=192.168.5.33`; it does not allow `0.0.0.0` or another interface. Without `VOICE_DEVELOPER_LOCAL_AUTH_LAN=1`, local authentication still requires `127.0.0.1`.
+The phone can then open [http://r2m2.local:8040](http://r2m2.local:8040), and the preview is available at [http://r2m2.local:5773](http://r2m2.local:5773). To pick the address yourself, set `VOICE_DEVELOPER_HOST`. The LAN opt-in is accepted only when the host is a private IPv4 address (10.x, 172.16-31.x or 192.168.x); it does not allow `0.0.0.0`, loopback or a public address. Phones must be in the same /22 network as the Mac (for `192.168.5.77`, that is `192.168.4.0/22`). Without `VOICE_DEVELOPER_LOCAL_AUTH_LAN=1`, local authentication still requires `127.0.0.1`.
 
 This mode exposes the controller and unauthenticated preview to devices on the trusted local network. Anyone on that network may use the app, so do not use this mode on an untrusted network and do not expose either port to the public internet. The preview has no sign-in of its own. Google OAuth is supported by the controller, but no OAuth credentials are configured or remote access has been tested with OAuth. The current phone path uses this explicit LAN local-auth opt-in instead. This setup does not configure Google OAuth, TLS, macOS firewall rules, or router settings. The phone and Mac must be on the same network, and macOS may require an incoming-connection approval for the two ports.
 
