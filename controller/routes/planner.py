@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from controller.providers import (
     resolve_roles,
     roles_info,
 )
+from controller.routes.jobs import auto_start_in, schedule_auto_start
 from controller.schemas import PlanRequest
 from controller.store import save_job
 
@@ -65,7 +67,10 @@ async def plan(req: PlanRequest):
     client = create_planner_client(provider)
 
     try:
-        response = create_plan_completion(
+        # In a thread: the planner call takes seconds, and calling it directly here blocked the
+        # whole server (job polling, the phone page) until it returned.
+        response = await asyncio.to_thread(
+            create_plan_completion,
             client,
             provider.model,
             [
@@ -103,10 +108,13 @@ async def plan(req: PlanRequest):
             "roles": roles_info(provider, coder),
         }
         save_job(job_id)
+        if req.auto_start and tasks:
+            schedule_auto_start(job_id)
 
         return {
             "status": "planned",
             "job_id": job_id,
+            "auto_start_in": auto_start_in(job_id),
             "plan": plan_text,
             "tasks": tasks,
             "task_count": len(tasks),

@@ -8,6 +8,8 @@ class SaveRequest(BaseModel):
 
 class PlanRequest(BaseModel):
     prompt: str
+    # Start the plan on the server after routes.jobs.AUTO_START_SECONDS unless cancelled.
+    auto_start: bool = False
 
 
 class LoadAppRequest(BaseModel):

@@ -292,7 +292,10 @@
         renderTaskList(job.tasks);
         updateTaskList(job);
         document.getElementById('planModal').style.display = 'flex';
-        if (job.status === 'queued' || job.status === 'running') {
+        modalJobId = job.job_id;
+        if (job.status === 'planned' && job.auto_start_in != null) {
+          startCountdown(job.job_id, job.auto_start_in);
+        } else if (job.status === 'queued' || job.status === 'running') {
           document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
           startPolling(job.job_id);
         }
@@ -311,12 +314,23 @@
           localStorage.setItem('activeJobId', job.job_id);
           setExecuting(true);
           setProcessing('Plan running on server...');
+        } else if (job.status === 'planned' && job.auto_start_in != null) {
+          // The page was reloaded (or reopened) during the countdown: show it again.
+          document.getElementById('fullPlanText').textContent = job.plan || '';
+          renderTaskList(job.tasks || []);
+          document.getElementById('planModal').style.display = 'flex';
+          modalJobId = job.job_id;
+          localStorage.setItem('activeJobId', job.job_id);
+          startCountdown(job.job_id, job.auto_start_in);
         }
       } catch(e) {}
     })();
 
+    // Fallback only: the server sends the real time left (routes/jobs.py AUTO_START_SECONDS).
     const AUTO_START_SECONDS = 5;
-    let countdownTimer = null;
+    let countdownTimer = null;    // display timer of the countdown on screen
+    let countdownJobId = null;    // the plan the server will start when it reaches zero
+    let modalJobId = null;        // the plan shown in the plan window
 
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -335,10 +349,27 @@
       } catch (e) {}
     })();
 
-    function cancelCountdown(message) {
-      if (!countdownTimer) return false;
-      clearInterval(countdownTimer);
+    function stopCountdownDisplay() {
+      if (countdownTimer) clearInterval(countdownTimer);
       countdownTimer = null;
+      countdownJobId = null;
+    }
+
+    function cancelCountdown(message) {
+      if (!countdownJobId) return false;
+      const jobId = countdownJobId;
+      stopCountdownDisplay();
+      // The server runs the countdown; tell it not to start. If it already started, the plan runs.
+      fetch(`/job/${jobId}/cancel-start`, { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.cancelled === false && (data.status === 'queued' || data.status === 'running')) {
+            setExecuting(true);
+            setProcessing('Plan already started on the server...');
+            startPolling(jobId);
+          }
+        })
+        .catch(() => {});
       const btn = document.getElementById('planBtn');
       btn.textContent = 'Plan';
       document.getElementById('closeBtn').textContent = 'Close';
@@ -351,52 +382,38 @@
       return true;
     }
 
-    async function executePlan(jobId) {
+    function showRunning(jobId) {
+      document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
       const status = document.getElementById('status');
-      try {
-        const res = await fetch(`/job/${jobId}/execute`, { method: 'POST' });
-        const data = await res.json();
-        if (res.ok) {
-          document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
-          status.textContent = 'Executing tasks...';
-          status.className = '';
-          setExecuting(true);
-          setProcessing('Executing tasks...');
-          startPolling(jobId);
-        } else {
-          status.textContent = data.detail || 'Could not start the plan';
-          status.className = 'err';
-          clearProcessing();
-        }
-      } catch (e) {
-        status.textContent = 'Network error';
-        status.className = 'err';
-        clearProcessing();
-      }
+      status.textContent = 'Executing tasks...';
+      status.className = '';
+      setExecuting(true);
+      setProcessing('Executing tasks...');
+      startPolling(jobId);
     }
 
-    function startCountdown(jobId) {
-      let left = AUTO_START_SECONDS;
+    // Shows the server's countdown. The server starts the plan itself, so a locked screen, a
+    // backgrounded tab or a reload can no longer stop it from starting (they used to).
+    function startCountdown(jobId, secondsLeft) {
+      stopCountdownDisplay();
+      const deadline = Date.now() + 1000 * (secondsLeft != null ? secondsLeft : AUTO_START_SECONDS);
       const btn = document.getElementById('planBtn');
       const show = () => {
+        const left = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
         btn.textContent = `Starting in ${left}s... click to cancel`;
         document.getElementById('status').textContent = `Plan ready. Starting in ${left}s. Click Plan or close this window to cancel.`;
       };
       document.getElementById('closeBtn').textContent = 'Close (cancels auto-start)';
       setProcessing('Plan ready. Starting soon...');
       show();
-      // Only one countdown at a time, and each clears its own timer: a second countdown used to
-      // overwrite countdownTimer, leaving the first one calling /execute every second forever.
-      if (countdownTimer) clearInterval(countdownTimer);
+      countdownJobId = jobId;
       const timer = setInterval(() => {
         if (countdownTimer !== timer) { clearInterval(timer); return; }
-        left -= 1;
-        if (left > 0) { show(); return; }
-        clearInterval(timer);
-        countdownTimer = null;
+        if (Date.now() < deadline) { show(); return; }
+        stopCountdownDisplay();
         btn.textContent = 'Plan';
-        executePlan(jobId);
-      }, 1000);
+        showRunning(jobId);  // the server has started it (or polling will show why it could not)
+      }, 250);
       countdownTimer = timer;
     }
 
@@ -417,7 +434,7 @@
         const res = await fetch('/plan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt })
+          body: JSON.stringify({ prompt, auto_start: true })
         });
         const data = await res.json();
         if (res.ok) {
@@ -425,9 +442,10 @@
           document.getElementById('fullPlanText').textContent = data.plan;
           renderTaskList(data.tasks || []);
           document.getElementById('planModal').style.display = 'flex';
+          modalJobId = data.job_id;
           if ((data.tasks || []).length > 0) {
             localStorage.setItem('activeJobId', data.job_id);
-            startCountdown(data.job_id);
+            startCountdown(data.job_id, data.auto_start_in);
           } else {
             status.textContent = 'Plan has no tasks to run';
             status.className = 'err';
@@ -527,7 +545,18 @@
             document.getElementById('prompt').value = '';
             clearProcessing();
             reloadPreview();
-            setTimeout(() => closePlan(), 10000);
+            // Close this plan's window later, but only if it is still the one shown: a new Plan
+            // within 10 s used to be closed by this, which also cancelled its auto-start.
+            setTimeout(() => { if (modalJobId === jobId && !countdownJobId && !isExecuting) closePlan(); }, 10000);
+          } else if (job.status === 'planned' && job.error && job.auto_start_in == null) {
+            // The server's auto-start could not start it (e.g. another plan was running).
+            clearInterval(pollTimer);
+            pollTimer = null;
+            setExecuting(false);
+            document.getElementById('closeBtn').textContent = 'Close';
+            document.getElementById('status').textContent = `${job.error} Press Continue plan to run it.`.slice(0, 300);
+            document.getElementById('status').className = 'err';
+            clearProcessing();
           } else if (job.status === 'failed') {
             clearInterval(pollTimer);
             pollTimer = null;
@@ -900,6 +929,7 @@
           renderTaskList(data.tasks);
           updateTaskList(data);
           document.getElementById('planModal').style.display = 'flex';
+          modalJobId = data.job_id;
           document.getElementById('closeBtn').textContent = 'Running... (close anyway)';
           status.textContent = 'Continuing plan...';
           setExecuting(true);
