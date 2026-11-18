@@ -457,7 +457,10 @@ class ServerLabelTests(unittest.TestCase):
                "MODEL_SERVER_MTPLX_KIND": "lmstudio", "MODEL_SERVER_MTPLX_URL": "http://127.0.0.1:8000",
                "MODEL_SERVER_MTPLX_LABEL": "MTPLX on this Mac",
                "CODER_PROVIDER": "mtplx", "CODER_MODEL": "qwen-env"}
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
         with patch.dict(os.environ, env, clear=True), \
+                patch.object(selection, "SELECTION_PATH", tmp / "sel.json"), \
                 patch.object(discovery.httpx, "get", fake_get()):
             entry = [p for p in discover_providers() if p["name"] == "mtplx"][0]
             self.assertEqual(entry["label"], "MTPLX on this Mac")
@@ -465,3 +468,81 @@ class ServerLabelTests(unittest.TestCase):
             from controller.providers import role_provider_info
             self.assertEqual(role_provider_info("coder", coder)["label"], "MTPLX on this Mac (local)")
             self.assertNotIn("127.0.0.1", json.dumps(entry))
+
+
+class ServerApiKeyTests(unittest.TestCase):
+    """MODEL_SERVER_<NAME>_API_KEY (e.g. MTPLX --api-key-file) goes to that server only and is never shown."""
+    KEY = "mtplx-test-key-123"
+    ENV = {**BASE_ENV, "ALLOW_LAN_MODEL_SERVERS": "on", "MODEL_SERVERS": "keyed,open",
+           "MODEL_SERVER_KEYED_KIND": "lmstudio", "MODEL_SERVER_KEYED_URL": "http://192.168.1.50:8000",
+           "MODEL_SERVER_KEYED_API_KEY": KEY,
+           "MODEL_SERVER_OPEN_KIND": "lmstudio", "MODEL_SERVER_OPEN_URL": "http://192.168.1.60:1234",
+           "CODER_PROVIDER": "keyed", "CODER_MODEL": "qwen-k"}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = self.tmp / "sel.json"
+        self.calls = []
+
+        def get(url, **kwargs):
+            self.calls.append((url, kwargs.get("headers")))
+            host = url.split("//")[1].split(":")[0]
+            ids = {"192.168.1.50": ["qwen-k"], "192.168.1.60": ["qwen-o"]}.get(host)
+            body = {"data": [{"id": i} for i in ids]} if ids else (
+                LMSTUDIO_TAGS if ":1234" in url else OLLAMA_TAGS)
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: body)
+
+        for p in (patch.object(selection, "SELECTION_PATH", self.path),
+                  patch.dict(os.environ, self.ENV, clear=True),
+                  patch.object(discovery.httpx, "get", get)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def headers_for(self, host):
+        return [h for url, h in self.calls if host in url]
+
+    def test_discovery_sends_the_key_only_to_its_server(self):
+        found = {p["name"]: p for p in discover_providers()}
+        self.assertTrue(found["keyed"]["available"])
+        self.assertEqual(self.headers_for("192.168.1.50"), [{"Authorization": f"Bearer {self.KEY}"}])
+        self.assertEqual(self.headers_for("192.168.1.60"), [None])
+        self.assertEqual(self.headers_for("127.0.0.1"), [None, None])
+        self.assertNotIn(self.KEY, json.dumps(found))
+
+    def test_probe_sends_the_key(self):
+        coder = resolve_coder_provider()
+        self.assertTrue(discovery.probe_server(coder))
+        self.assertEqual(self.headers_for("192.168.1.50"), [{"Authorization": f"Bearer {self.KEY}"}])
+        open_server = resolve_coder_provider({**self.ENV, "CODER_PROVIDER": "open", "CODER_MODEL": "qwen-o"})
+        self.assertIsNone(open_server.api_key)
+        self.assertTrue(discovery.probe_server(open_server))
+        self.assertEqual(self.headers_for("192.168.1.60"), [None])
+
+    def test_aider_and_planner_get_the_servers_key(self):
+        from controller.providers import create_planner_client
+        keyed = resolve_coder_provider()
+        self.assertEqual(provider_environment(keyed, {"PATH": "/bin"})["LM_STUDIO_API_KEY"], self.KEY)
+        self.assertEqual(create_planner_client(keyed).api_key, self.KEY)
+        open_server = resolve_coder_provider({**self.ENV, "CODER_PROVIDER": "open", "CODER_MODEL": "qwen-o"})
+        environment = provider_environment(open_server, {"PATH": "/bin", "LM_STUDIO_API_KEY": self.KEY})
+        self.assertEqual(environment["LM_STUDIO_API_KEY"], "lm-studio")  # another rung's key doesn't leak in
+        self.assertEqual(create_planner_client(open_server).api_key, "lm-studio")
+
+    def test_key_never_in_payload_saved_file_or_repr(self):
+        payload = put_model_config(req(coder=("keyed", "qwen-k")))
+        text = json.dumps(payload) + json.dumps(get_model_config()) + self.path.read_text()
+        coder = resolve_coder_provider()
+        from controller.model_servers import resolve_server
+        text += repr(coder) + repr(resolve_server(os.environ, "keyed"))
+        self.assertNotIn(self.KEY, text)
+
+    def test_invalid_keys_are_rejected(self):
+        from controller.model_servers import resolve_server
+        with self.assertRaisesRegex(PlannerConfigurationError, "only supported for kind lmstudio"):
+            resolve_server({**self.ENV, "MODEL_SERVER_KEYED_KIND": "ollama"}, "keyed")
+        for bad in ("two words", "tab\tkey", "bell\x07"):
+            with self.assertRaisesRegex(PlannerConfigurationError, "single printable token") as ctx:
+                resolve_server({**self.ENV, "MODEL_SERVER_KEYED_API_KEY": bad}, "keyed")
+            self.assertNotIn(bad, str(ctx.exception))
+        self.assertIsNone(resolve_server({**self.ENV, "MODEL_SERVER_KEYED_API_KEY": "  "}, "keyed").api_key)

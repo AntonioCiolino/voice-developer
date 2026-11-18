@@ -505,7 +505,10 @@ class ModelServerProviderTests(unittest.TestCase):
 
     def test_labels_and_no_url(self):
         planner, coder = resolve_roles(self.values(CODER_PROVIDER="here", CODER_MODEL="m"))
-        info = roles_info(planner, coder)
+        # Labels come from os.environ; keep the real .env's MODEL_SERVER_*_LABEL out of this test.
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("MODEL_SERVER")}
+        with patch.dict(os.environ, clean, clear=True):
+            info = roles_info(planner, coder)
         self.assertEqual(info["planner"]["label"], "LM Studio on mini (local network)")
         self.assertEqual(info["coder"]["label"], "Ollama on here (local)")
         self.assertEqual((info["planner"]["name"], info["planner"]["endpoint"], info["planner"]["location_label"]),

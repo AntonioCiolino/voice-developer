@@ -15,7 +15,7 @@ import concurrent.futures
 import ipaddress
 import re
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from controller.providers import PlannerConfigurationError
@@ -38,6 +38,9 @@ class ModelServer:
     kind: str   # "lmstudio" | "ollama"
     base: str   # http(s)://host[:port], no trailing slash or /v1; a .local host is already pinned to its IPv4
     lan: bool   # True when the host is on the local network rather than this machine
+    # MODEL_SERVER_<NAME>_API_KEY, sent as a Bearer token to that server only (e.g. MTPLX started
+    # with --api-key-file). Kept out of repr so it never lands in a log or error message.
+    api_key: str | None = field(default=None, repr=False)
 
 
 def _infix(name: str) -> str:
@@ -188,4 +191,12 @@ def resolve_server(values, name: str) -> ModelServer:
     if not url:
         raise PlannerConfigurationError(f"{url_var} is required for model server '{name}'")
     base, lan = validate_server_url(url, url_var, lan_opt_in(values))
-    return ModelServer(name, kind, base, lan)
+    key_var = f"MODEL_SERVER_{infix}_API_KEY"
+    api_key = values.get(key_var, "").strip() or None
+    if api_key is not None:
+        if kind != "lmstudio":
+            raise PlannerConfigurationError(
+                f"{key_var} is only supported for kind lmstudio (OpenAI-compatible servers such as MTPLX)")
+        if not api_key.isprintable() or any(ch.isspace() for ch in api_key):
+            raise PlannerConfigurationError(f"{key_var} must be a single printable token")
+    return ModelServer(name, kind, base, lan, api_key)

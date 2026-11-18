@@ -47,8 +47,11 @@ def _ollama_runs_remotely(entry: dict) -> bool:
     return isinstance(size, int) and size < LOCAL_WEIGHTS_MIN_BYTES
 
 
-def _get_json(url: str):
-    response = httpx.get(url, timeout=TIMEOUT_SECONDS, follow_redirects=False, trust_env=False)
+def _get_json(url: str, api_key: str | None = None):
+    kwargs = {"timeout": TIMEOUT_SECONDS, "follow_redirects": False, "trust_env": False}
+    if api_key:  # a named server's own key; never logged, never in an error message
+        kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
+    response = httpx.get(url, **kwargs)
     response.raise_for_status()
     return response.json()
 
@@ -106,7 +109,7 @@ def _discover_server(name: str) -> dict:
     label = server_label(os.environ, name, server.kind)
     where = "lan" if server.lan else "local"
     try:
-        data = _get_json(f"{server.base}{_MODELS_PATHS[server.kind]}")
+        data = _get_json(f"{server.base}{_MODELS_PATHS[server.kind]}", server.api_key)
         if server.kind == "lmstudio":
             ids = [m["id"] for m in data["data"] if isinstance(m.get("id"), str) and "embed" not in m["id"].lower()]
             models = [_model(i, False, where) for i in ids]
@@ -124,7 +127,7 @@ def probe_server(provider) -> bool:
     """One short GET of the server's models list. True when it answers; never raises, never reports the URL."""
     base = provider.lmstudio_api_base if provider.name == "lmstudio" else provider.ollama_api_base
     try:
-        _get_json(f"{base}{_MODELS_PATHS[provider.name]}")
+        _get_json(f"{base}{_MODELS_PATHS[provider.name]}", provider.api_key if provider.server else None)
     except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
         return False
     return True

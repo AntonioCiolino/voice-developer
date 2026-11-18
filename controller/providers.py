@@ -1,6 +1,6 @@
 import ipaddress
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from controller import config  # noqa: F401  (loads controller/.env)
@@ -23,7 +23,7 @@ LOCATION_LABELS = {"local": "This machine", "lan": "Local network", "cloud": "Cl
 class PlannerProvider:
     name: str
     model: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)  # never in a log or error message
     ollama_api_base: str | None = None
     lmstudio_api_base: str | None = None
     server: str | None = None  # friendly name of a configured model server (name is then its kind)
@@ -182,7 +182,8 @@ def _resolve_role(values, provider_var: str, model_var: str, default_provider: s
 
 def _server_provider(server, model: str) -> PlannerProvider:
     base = {"lmstudio_api_base": server.base} if server.kind == "lmstudio" else {"ollama_api_base": server.base}
-    return PlannerProvider(name=server.kind, model=model, server=server.name, lan=server.lan, **base)
+    return PlannerProvider(name=server.kind, model=model, server=server.name, lan=server.lan,
+                           api_key=server.api_key, **base)
 
 
 def fresh_provider(provider: PlannerProvider) -> PlannerProvider:
@@ -226,7 +227,8 @@ def create_planner_client(provider: PlannerProvider):
     if provider.name == "ollama":
         return OpenAI(api_key="ollama", base_url=provider.planner_base_url)
     if provider.name == "lmstudio":
-        return OpenAI(api_key=LMSTUDIO_PLACEHOLDER_KEY, base_url=provider.planner_base_url)
+        # A named server may have its own key (MODEL_SERVER_<NAME>_API_KEY); this Mac's LM Studio needs none.
+        return OpenAI(api_key=provider.api_key or LMSTUDIO_PLACEHOLDER_KEY, base_url=provider.planner_base_url)
     return OpenAI(api_key=provider.api_key)
 
 
@@ -336,7 +338,7 @@ def provider_environment(provider: PlannerProvider, base_env: dict[str, str] | N
     if provider.name == "lmstudio":
         # litellm's lm_studio/ provider reads these two variables.
         environment["LM_STUDIO_API_BASE"] = provider.planner_base_url
-        environment["LM_STUDIO_API_KEY"] = LMSTUDIO_PLACEHOLDER_KEY
+        environment["LM_STUDIO_API_KEY"] = provider.api_key or LMSTUDIO_PLACEHOLDER_KEY
         return environment
     for variable in _OPENAI_OPTIONAL_ENV_VARS:
         if variable in source:
