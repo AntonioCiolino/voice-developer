@@ -439,6 +439,43 @@ class PlannerTemperatureTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "rate limited"):
             self.planner.create_plan_completion(client, "gpt-6-luna", [])
 
+    def test_budget_leaves_room_for_reasoning(self):
+        # Reasoning models count hidden reasoning in max_completion_tokens; 2000 emptied plans.
+        client, calls = self.client(reject_temperature=False)
+        self.planner.create_plan_completion(client, "gpt-6-luna", [])
+        self.assertEqual(calls[0]["max_completion_tokens"], 8000)
+
+
+class LocalCoderMaxTokensTests(unittest.TestCase):
+    """Aider sends no output limit; local servers then stop at ~2000 tokens mid whole-file edit."""
+
+    def setUp(self):
+        from controller.coder import aider
+        self.aider = aider
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        p = patch.object(aider, "GENERATED_SETTINGS_DIR", self.tmp)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_local_coder_gets_a_limit_and_keeps_the_shared_settings(self):
+        from controller.providers import PlannerProvider
+        local = PlannerProvider(name="lmstudio", model="qwen3.5-4b", lmstudio_api_base="http://127.0.0.1:8000")
+        path = self.aider.model_settings_file(local)
+        self.assertEqual(path.parent, self.tmp)
+        text = path.read_text()
+        self.assertIn('- name: "lm_studio/qwen3.5-4b"\n  extra_params:\n    max_tokens: 8192\n', text)
+        self.assertIn("- name: gpt-6-luna\n  use_temperature: false", text)
+        self.assertEqual(self.aider.model_settings_file(local), path)  # same file, rewritten only on change
+        cmd = self.aider.build_aider_command(local, "do it", ["src/a.jsx"])
+        self.assertEqual(cmd[cmd.index("--model-settings-file") + 1], str(path))
+
+    def test_cloud_coder_uses_the_shared_file(self):
+        from controller.providers import PlannerProvider
+        cloud = PlannerProvider(name="openai", model="gpt-6-luna", api_key="sk-x")
+        self.assertEqual(self.aider.model_settings_file(cloud), self.aider.AIDER_MODEL_SETTINGS)
+        self.assertEqual(list(self.tmp.iterdir()), [])
+
 
 class ServerLabelTests(unittest.TestCase):
     """MODEL_SERVER_<NAME>_LABEL names a server in the panel and badge (kind lmstudio covers MTPLX too)."""

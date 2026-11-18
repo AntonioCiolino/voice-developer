@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from controller import state
+from controller import config, state
 from controller.coder import resolve_coder_engine, resolve_max_file_lines
 from controller.planning import parse_tasks, planner_system_prompt, planner_user_msg
 from controller.providers import (
@@ -21,6 +21,13 @@ from controller.store import save_job
 router = APIRouter()
 
 PLANNER_TEMPERATURE = 0.7
+# Output budget for one plan. Keep it generous: reasoning models (gpt-6-luna and the like) count
+# their hidden reasoning against max_completion_tokens, and how much they reason varies from one
+# request to the next. When the budget runs out mid-reasoning they return an empty answer with
+# finish_reason "length", and nothing is visibly wrong except the missing output. At 2000 Luna
+# did this on about one plan in three (2000 reasoning tokens, 0 written); a plan itself is only
+# 400-800 tokens, so the limit was being spent on thinking. Unused budget costs nothing.
+PLANNER_MAX_COMPLETION_TOKENS = 8000
 # Models (e.g. the GPT-6 family) that reject any temperature except the default.
 _DEFAULT_TEMPERATURE_ONLY: set[str] = set()
 
@@ -34,7 +41,7 @@ def _rejects_temperature(exc: Exception) -> bool:
 
 def create_plan_completion(client, model: str, messages: list[dict]):
     """Call the planner. Retry once without temperature if the model only allows its default."""
-    kwargs = {"model": model, "messages": messages, "max_completion_tokens": 2000}
+    kwargs = {"model": model, "messages": messages, "max_completion_tokens": PLANNER_MAX_COMPLETION_TOKENS}
     if model not in _DEFAULT_TEMPERATURE_ONLY:
         try:
             return client.chat.completions.create(temperature=PLANNER_TEMPERATURE, **kwargs)
@@ -84,6 +91,10 @@ async def plan(req: PlanRequest):
 
         plan_text = response.choices[0].message.content or ""
         if not plan_text.strip():
+            if getattr(response.choices[0], "finish_reason", None) == "length":
+                raise RuntimeError(
+                    f"{provider.model} used its whole {PLANNER_MAX_COMPLETION_TOKENS}-token budget thinking "
+                    "and wrote no plan. Press Plan again, or make the request shorter.")
             raise RuntimeError(f"{provider.model} returned an empty plan")
         tasks = parse_tasks(plan_text)
 
@@ -122,4 +133,5 @@ async def plan(req: PlanRequest):
             "roles": roles_info(provider, coder),
         }
     except Exception as e:
+        config.logger.warning("Planning failed: %s", e)
         raise HTTPException(status_code=502, detail=f"Planning failed: {str(e)}")

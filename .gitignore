@@ -32,3 +32,5 @@ worker/tasks.log
 controller/model-selection.json
 # Name of the app currently in generated-app/
 controller/current-app.json
+# Aider model settings generated per local coder model
+controller/coder/.generated/
