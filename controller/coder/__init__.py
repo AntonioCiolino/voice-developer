@@ -4,6 +4,7 @@ from controller.coder.base import (
     CoderEngineNotImplemented,
     resolve_coder_edit_format,
     resolve_coder_engine,
+    resolve_max_file_lines,
     resolve_coder_timeout,
 )
 from controller.coder.opencode import OPENCODE_NOT_IMPLEMENTED, build_opencode_command

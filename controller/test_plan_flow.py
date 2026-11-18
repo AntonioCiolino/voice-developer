@@ -508,7 +508,7 @@ class RunJobTests(TempAppCase):
         with patch.object(subprocess, "run", fake):
             asyncio.run(run_job(JOB_A))
         cmd, kwargs = fake.calls[0]
-        self.assertEqual(cmd[cmd.index("--edit-format") + 1], "diff")
+        self.assertEqual(cmd[cmd.index("--edit-format") + 1], "whole")  # local coder default
         self.assertEqual(kwargs["timeout"], 120)
         self.assertIn("YOUR TASK, step 1 of 1:\n  t1", cmd[cmd.index("--message") + 1])
         self.assertEqual(jobs[JOB_A]["status"], "done")

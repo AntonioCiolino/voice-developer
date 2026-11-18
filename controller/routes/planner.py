@@ -4,8 +4,8 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from controller import state
-from controller.coder import resolve_coder_engine
-from controller.planning import PLANNER_SYSTEM_PROMPT, parse_tasks, planner_user_msg
+from controller.coder import resolve_coder_engine, resolve_max_file_lines
+from controller.planning import parse_tasks, planner_system_prompt, planner_user_msg
 from controller.providers import (
     PlannerConfigurationError,
     create_planner_client,
@@ -58,6 +58,7 @@ async def plan(req: PlanRequest):
     """Generate a plan and store it as a planned job. Execution starts separately."""
     try:
         provider, coder = resolve_roles()
+        max_lines = resolve_max_file_lines()
     except PlannerConfigurationError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -70,7 +71,7 @@ async def plan(req: PlanRequest):
             [
                 {
                     "role": "system",
-                    "content": PLANNER_SYSTEM_PROMPT,
+                    "content": planner_system_prompt(max_lines),
                 },
                 {"role": "user", "content": planner_user_msg(req.prompt)},
             ],
@@ -94,6 +95,7 @@ async def plan(req: PlanRequest):
             "task_logs": [""] * len(tasks),
             "task_costs": [""] * len(tasks),
             "task_errors": [""] * len(tasks),
+            "task_warnings": [""] * len(tasks),
             "created_at": datetime.now().isoformat(),
             "error": None,
             "engine": resolve_coder_engine(),

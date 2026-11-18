@@ -37,10 +37,34 @@ def resolve_coder_timeout(env: dict[str, str] | None = None) -> int:
     return seconds
 
 
-def resolve_coder_edit_format(env: dict[str, str] | None = None) -> str:
-    """CODER_EDIT_FORMAT: Aider edit format (default 'diff')."""
+def resolve_max_file_lines(env: dict[str, str] | None = None) -> int:
+    """MAX_FILE_LINES (.env only): the line limit per generated source file (default 150)."""
     values = os.environ if env is None else env
-    edit_format = values.get("CODER_EDIT_FORMAT", "").strip().lower() or "diff"
+    raw = values.get("MAX_FILE_LINES", "").strip()
+    if not raw:
+        return config.DEFAULT_MAX_FILE_LINES
+    try:
+        lines = int(raw)
+    except ValueError:
+        lines = 0
+    if lines <= 0:
+        raise PlannerConfigurationError("MAX_FILE_LINES must be a positive integer")
+    return lines
+
+
+def resolve_coder_edit_format(env: dict[str, str] | None = None, provider=None) -> str:
+    """CODER_EDIT_FORMAT: Aider edit format.
+
+    When unset the default follows the coder provider: 'whole' for a local coder
+    (ollama/lmstudio, where the files are kept small and a 7B model cannot reproduce
+    SEARCH blocks) and 'diff' for a cloud coder. An Ollama ':cloud' model runs in the
+    cloud (provider.is_local is False), so it gets 'diff'. CODER_EDIT_FORMAT, when set,
+    always wins. The caller passes the coder resolved for this run, so a hot-swapped
+    coder gets its own default. Without a provider the default is 'diff'.
+    """
+    values = os.environ if env is None else env
+    default = "whole" if provider is not None and provider.is_local else "diff"
+    edit_format = values.get("CODER_EDIT_FORMAT", "").strip().lower() or default
     if edit_format not in _EDIT_FORMATS:
         raise PlannerConfigurationError(
             "CODER_EDIT_FORMAT must be one of: " + ", ".join(_EDIT_FORMATS)

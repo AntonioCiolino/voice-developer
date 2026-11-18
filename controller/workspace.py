@@ -1,4 +1,6 @@
+import os
 import pathlib
+import re
 import subprocess
 
 from controller import config
@@ -8,13 +10,72 @@ _BINARY_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff
                 '.ttf', '.eot', '.map', '.lock'}
 
 
-def task_scope_files() -> list[pathlib.Path]:
-    """The exact files handed to the coder: non-binary src/ files plus top-level config files."""
+_CONFIG_FILES = ("vite.config.js", "index.html", "package.json")
+_CODE_EXTS = (".jsx", ".js", ".tsx", ".ts")
+_IMPORT_RE = re.compile(
+    r"""(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]""")
+
+
+def snapshot_scope_files() -> list[pathlib.Path]:
+    """Every file a task could change, which the revert snapshot and the commit cover.
+
+    All non-binary src/ files plus the top-level config files. This stays the same no
+    matter which files a task hands the coder: the coder may touch or create other
+    files under src/, and index.html/package.json/vite.config.js stay covered so a
+    stray edit there is reverted too. New src/ files are handled by snapshot_task_scope.
+    """
     files = [f for f in sorted(config.APP_SRC.rglob("*")) if f.is_file() and f.suffix not in _BINARY_EXTS]
-    for extra in ["vite.config.js", "index.html", "package.json"]:
+    for extra in _CONFIG_FILES:
         p = config.APP_ROOT / extra
         if p.exists():
             files.append(p)
+    return files
+
+
+def _resolve_import(importer: pathlib.Path, spec: str) -> set[pathlib.Path]:
+    """Candidate files a relative import specifier can point at (extension/index resolution)."""
+    base = pathlib.Path(os.path.normpath(importer.parent / spec))
+    candidates = {base}
+    candidates.update(base.with_name(base.name + ext) for ext in _CODE_EXTS)
+    candidates.update(base / ("index" + ext) for ext in _CODE_EXTS)
+    return candidates
+
+
+def importers_of(named: list[pathlib.Path]) -> list[pathlib.Path]:
+    """src/ files that directly import one of the named files (one level, relative imports)."""
+    targets = {pathlib.Path(os.path.normpath(p)) for p in named}
+    found = []
+    for f in sorted(config.APP_SRC.rglob("*")):
+        if not f.is_file() or f.suffix not in _CODE_EXTS or f in named:
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+        except OSError:
+            continue
+        for spec in _IMPORT_RE.findall(text):
+            if spec.startswith(".") and _resolve_import(f, spec) & targets:
+                found.append(f)
+                break
+    return found
+
+
+def task_scope_files(task_files: list[str] | None = None) -> list[pathlib.Path]:
+    """The files handed to the coder for one task.
+
+    task_files are the paths the task names (planning.parse_task_files), relative to the
+    app root. The coder gets those, including ones that do not exist yet (Aider creates
+    them), plus the existing src/ files that directly import them, so wiring a new module
+    into App.jsx works when the task names App.jsx and editing a module also shows its
+    caller. Aider's repo map still outlines the rest. With no task_files (the task names
+    no file) it falls back to the whole snapshot scope, which is the earlier behavior.
+    """
+    if not task_files:
+        return snapshot_scope_files()
+    named = [config.APP_ROOT / rel for rel in task_files]
+    files = list(named)
+    for f in importers_of([p for p in named if p.exists()]):
+        if f not in files:
+            files.append(f)
     return files
 
 
@@ -30,7 +91,7 @@ def snapshot_task_scope() -> dict:
         if result.returncode == 0:
             head = result.stdout.strip() or None
     return {
-        "files": {f.relative_to(config.APP_ROOT).as_posix(): f.read_bytes() for f in task_scope_files()},
+        "files": {f.relative_to(config.APP_ROOT).as_posix(): f.read_bytes() for f in snapshot_scope_files()},
         "src_files": {f.relative_to(config.APP_ROOT).as_posix() for f in config.APP_SRC.rglob("*") if f.is_file()},
         "head": head,
     }
@@ -71,6 +132,25 @@ def changed_task_paths(snapshot: dict) -> list[str]:
         if f.is_file() and rel not in snapshot["src_files"]:
             changed.append(rel)
     return changed
+
+
+def over_limit_files(snapshot: dict, max_lines: int) -> list[tuple[str, int]]:
+    """(path, line count) for text files this task changed or created that exceed max_lines.
+
+    Only files the task touched are checked, so an old oversized file the task did not
+    edit is not blamed on it. package.json and index.html are exempt (not code modules).
+    """
+    over = []
+    for rel in changed_task_paths(snapshot):
+        if not rel.startswith("src/"):
+            continue
+        path = config.APP_ROOT / rel
+        if not path.is_file() or path.suffix in _BINARY_EXTS:
+            continue
+        lines = len(path.read_text(errors="ignore").splitlines())
+        if lines > max_lines:
+            over.append((rel, lines))
+    return over
 
 
 def commit_task(snapshot: dict, message: str) -> str:

@@ -10,7 +10,9 @@ from controller.coder import (
     resolve_coder_edit_format,
     resolve_coder_engine,
     resolve_coder_timeout,
+    resolve_max_file_lines,
 )
+from controller.planning import parse_task_files
 from controller.providers import (
     PlannerConfigurationError,
     provider_environment,
@@ -22,6 +24,7 @@ from controller.store import save_job
 from controller.workspace import (
     changed_task_paths,
     commit_task,
+    over_limit_files,
     ensure_app_repo_hygiene,
     revert_task,
     snapshot_task_scope,
@@ -130,7 +133,8 @@ def tail(value, limit: int = LOG_TAIL_LIMIT) -> str:
     return text_of(value).strip()[-limit:]
 
 
-def build_task_prompt(job: dict, i: int) -> str:
+def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: int | None = None,
+                      files: list[str] | None = None) -> str:
     """Prompt for one task. Scoped so the coder does only this task, with a minimal edit.
 
     The full plan is deliberately not included: given every task, small models tend to
@@ -139,6 +143,20 @@ def build_task_prompt(job: dict, i: int) -> str:
     """
     tasks = job['tasks']
     n = len(tasks)
+    max_lines = max_lines or config.DEFAULT_MAX_FILE_LINES
+    if edit_format == "whole":
+        edit_rules = (
+            "- Return each file you change in full, with every existing line that the task does not "
+            "change kept exactly as it is. Never drop, shorten or summarize existing code.\n"
+        )
+    else:
+        edit_rules = (
+            "- Copy each SEARCH block exactly from the current file, including indentation.\n"
+            + "- Never write '...' or any placeholder inside a SEARCH block; it must contain only real "
+            + "lines from the file.\n"
+            + "- Keep each SEARCH block short: just the few lines being changed plus a line or two around them. "
+            + "Use several small blocks rather than one large one.\n"
+        )
     completed = [f"  - Task {j+1}: {tasks[j]}" for j in range(i) if job['task_statuses'][j] == 'done']
     later = [f"  - Task {j+1}: {tasks[j]}" for j in range(i + 1, n)]
     return (
@@ -149,6 +167,8 @@ def build_task_prompt(job: dict, i: int) -> str:
         + ("Already done (these changes are in the files; do not redo them):\n"
            + "\n".join(completed) + "\n\n" if completed else "")
         + f"YOUR TASK, step {i+1} of {n}:\n  {tasks[i]}\n\n"
+        + ("Files provided for this task (create a file named here if it does not exist): "
+           + ", ".join(files) + "\n\n" if files else "")
         + ("Later steps (do NOT implement any of these now; they are done separately):\n"
            + "\n".join(later) + "\n\n" if later else "")
         + "Rules:\n"
@@ -156,11 +176,9 @@ def build_task_prompt(job: dict, i: int) -> str:
         + "- Make the smallest change that completes it. Edit only the lines it needs.\n"
         + "- Keep all existing code, names, formatting and behavior that the task does not require changing. "
         + "Do not refactor, reorder or reformat.\n"
-        + "- Copy each SEARCH block exactly from the current file, including indentation.\n"
-        + "- Never write '...' or any placeholder inside a SEARCH block; it must contain only real "
-        + "lines from the file.\n"
-        + "- Keep each SEARCH block short: just the few lines being changed plus a line or two around them. "
-        + "Use several small blocks rather than one large one.\n"
+        + edit_rules
+        + f"- Keep every file under {max_lines} lines. Put new components or logic in a new small file "
+        + "under src/ and wire it in with an import and a few lines, instead of growing an existing file.\n"
         + "- Do not ask clarifying questions or request additional files; use the files provided."
     )
 
@@ -199,13 +217,15 @@ async def run_job(job_id: str) -> None:
     job = state.jobs[job_id]
     n = len(job['tasks'])
     job.setdefault('task_errors', [""] * n)
+    job.setdefault('task_warnings', [""] * n)
     job['status'] = 'running'
     job['error'] = None
     try:
         planner, provider = resolve_roles()
         engine = resolve_coder_engine()
         timeout = resolve_coder_timeout()
-        edit_format = resolve_coder_edit_format()
+        edit_format = resolve_coder_edit_format(provider=provider)  # default follows the coder in use
+        max_lines = resolve_max_file_lines()
     except PlannerConfigurationError as exc:
         job['status'] = 'failed'
         job['error'] = str(exc)
@@ -225,12 +245,16 @@ async def run_job(job_id: str) -> None:
         job['current_task'] = i
         job['task_statuses'][i] = 'running'
         job['task_errors'][i] = ""
+        job['task_warnings'][i] = ""
         save_job(job_id)
         snapshot = None
         try:
             snapshot = snapshot_task_scope()
-            files = [str(f.relative_to(config.REPO_ROOT)) for f in task_scope_files()]
-            command = build_coder_command(engine, provider, build_task_prompt(job, i), files, edit_format)
+            # Only the files this task names (plus their importers); no named file -> all src files.
+            files = [str(f.relative_to(config.REPO_ROOT))
+                     for f in task_scope_files(parse_task_files(job['tasks'][i]))]
+            prompt = build_task_prompt(job, i, edit_format, max_lines, files)
+            command = build_coder_command(engine, provider, prompt, files, edit_format)
             result = await run_coder_streaming(job_id, i, command, provider, timeout)
         except CoderEngineNotImplemented as exc:
             _fail_task(job_id, i, snapshot, str(exc))
@@ -289,6 +313,12 @@ async def run_job(job_id: str) -> None:
         except Exception as exc:
             note = f"commit skipped: {exc}"
         job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + note
+        # Over-limit files are a warning, not a failure: the work is kept and committed (see README).
+        over = over_limit_files(snapshot, max_lines)
+        if over:
+            job['task_warnings'][i] = "Over the line limit (MAX_FILE_LINES=%d): " % max_lines + ", ".join(
+                f"{rel} has {count} lines" for rel, count in over
+            ) + ". Split it into smaller files in a later task."
         job['task_statuses'][i] = 'done'
         save_job(job_id)
 

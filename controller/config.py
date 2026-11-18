@@ -11,3 +11,5 @@ APP_SRC = APP_ROOT / "src"
 SAVED_APPS = REPO_ROOT / "saved-apps"
 PLANS_DIR = REPO_ROOT / "plans"
 logger = logging.getLogger("voice-developer")
+
+DEFAULT_MAX_FILE_LINES = 150

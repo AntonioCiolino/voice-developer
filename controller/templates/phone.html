@@ -445,7 +445,8 @@
         taskEl.className = `taskItem task-${s}`;
         document.getElementById(`taskIcon-${i}`).textContent = icons[s] || '○';
         const taskError = (job.task_errors || [])[i];
-        const logText = [job.task_logs[i], taskError].filter(Boolean).join('\n\n');
+        const taskWarning = (job.task_warnings || [])[i];
+        const logText = [job.task_logs[i], taskError, taskWarning].filter(Boolean).join('\n\n');
         const logEl = document.getElementById(`taskLog-${i}`);
         if (logText && logEl.textContent !== logText) {
           // Follow the live output unless the user scrolled up to read earlier lines.
