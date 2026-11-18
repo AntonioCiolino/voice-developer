@@ -446,7 +446,8 @@
         document.getElementById(`taskIcon-${i}`).textContent = icons[s] || '○';
         const taskError = (job.task_errors || [])[i];
         const taskWarning = (job.task_warnings || [])[i];
-        const logText = [job.task_logs[i], taskError, taskWarning].filter(Boolean).join('\n\n');
+        const rungInfo = job.ladder ? (job.task_rungs || [])[i] : null;
+        const logText = [...((rungInfo && rungInfo.history) || []), job.task_logs[i], taskError, taskWarning].filter(Boolean).join('\n\n');
         const logEl = document.getElementById(`taskLog-${i}`);
         if (logText && logEl.textContent !== logText) {
           // Follow the live output unless the user scrolled up to read earlier lines.
@@ -464,13 +465,17 @@
           document.getElementById(`taskLog-${i}`).style.display = 'block';
           document.getElementById(`taskChevron-${i}`).textContent = '▼';
         }
-        if (job.task_costs[i]) document.getElementById(`taskMeta-${i}`).textContent = job.task_costs[i];
+        const metaParts = [];
+        if (rungInfo) metaParts.push((rungInfo.history && rungInfo.history.length ? '↑ ' : '') + rungInfo.label);
+        if (job.task_costs[i]) metaParts.push(job.task_costs[i]);
+        if (metaParts.length) document.getElementById(`taskMeta-${i}`).textContent = metaParts.join(' · ');
       });
       const status = document.getElementById('status');
       if (job.status === 'queued') {
         status.textContent = 'Queued...';
       } else if (job.status === 'running' && job.current_task >= 0) {
-        status.textContent = `Task ${job.current_task + 1}/${job.tasks.length}...`;
+        const spend = job.ladder ? ` · ${job.plan_cost_estimated ? '~' : ''}$${Number(job.plan_cost || 0).toFixed(2)}/$${Number(job.ladder.max_plan_cost).toFixed(2)}` : '';
+        status.textContent = `Task ${job.current_task + 1}/${job.tasks.length}...${spend}`;
       }
     }
 

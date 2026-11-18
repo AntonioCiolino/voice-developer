@@ -705,7 +705,7 @@ class UiTests(unittest.TestCase):
     def test_ui_strings(self):
         for needle in ("AUTO_START_SECONDS = 5", "/job/${", "/continue", "Continue plan",
                        "task_errors", "cancelCountdown", "click to cancel",
-                       "/model-config", "configModal", "configBtn"):
+                       "/model-config", "configModal", "configBtn", "task_rungs", "plan_cost"):
             self.assertIn(needle, PHONE_UI)
         for needle in ("/generate", "claude-sonnet", "Generate"):
             self.assertNotIn(needle, PHONE_UI.replace("Generated app", "").replace("generated app", "")

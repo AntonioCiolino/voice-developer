@@ -160,6 +160,7 @@ Each clone has one active workspace. Browser tabs connected to the same controll
 - `auth.py`: Google sign-in session helpers, the local-auth and LAN checks, and startup auth validation.
 - `providers.py`: planner and coder provider settings, loopback checks, and per-role subprocess environments.
 - `coder/`: one module per coder engine (`aider.py`, `opencode.py`) with shared settings in `base.py`. A new engine is a new module here plus one name in `coder/base.py`, and one branch in `coder/__init__.py`.
+- `escalation.py`: the coder ladder, escalation mode and plan cost cap settings.
 - `planning.py`, `store.py`, `workspace.py`, `worker.py`: plan parsing and prompts, `plans/<id>.json` persistence, per-task snapshot/revert/commit, and the job worker.
 - `config.py` (paths, `.env`), `state.py` (in-memory jobs and queue), `ui.py` with `templates/phone.html` (the phone page).
 
@@ -258,6 +259,28 @@ Local model caveats on an M2 Pro with 16 GB RAM:
 - Aider has a 120 s timeout per task in `job_worker`, so slow local models may time out.
 
 Restart the controller after editing `.env` (`./stop.sh`, then `./start.sh`).
+
+## Coder escalation (model ladder)
+
+The server, not the voice user, decides when a task needs a stronger coder. Set a ladder in `controller/.env` (weakest first, `provider:model`, comma separated; the split is on the first `:`, so `ollama:qwen2.5-coder:7b` works):
+
+```
+CODER_LADDER=lmstudio:mlx-community/qwen2.5-coder-7b-instruct,openai:gpt-6-luna,openai:gpt-6.1-terra,openai:gpt-6.2-sol,openai:gpt-6.2-astra
+AUTO_ESCALATE=on          # on (default) | suggest | off
+MAX_PLAN_COST=1.00        # dollars per plan, default 1.00
+ESCALATE_LOCAL_ONLY=off   # on: local rungs only
+```
+
+- **Starting rung.** The coder from the ⚙ panel (else `.env`) is the starting rung. If it is in the ladder, only that rung and the ones above it are used. If it is not, it is added below the whole ladder. Every task starts on the starting rung again, not where the previous task ended.
+- **One attempt per rung.** A rung attempt is the coder run plus the existing single build/lint retry with the error (that retry stays inside the rung). If the attempt fails, the task is reverted and the next rung runs it from the clean files, with the earlier failure text in its prompt.
+- **What escalates.** Build or lint failure after the retry, coder timeout, "reflections allowed, stopping" (partial apply), no edit applied (model API error, SEARCH mismatch, edit-format error; this includes a local server that is down, logged as "the model server could not be reached"), and an `App.jsx` corruption. These do not escalate and fail the run as before: a non-zero Aider exit code, Aider missing, the opencode stub, a validator that could not run. When the last rung fails, the run fails with `Task N failed on all K rungs (...)`.
+- **`AUTO_ESCALATE`.** `on` escalates automatically. `suggest` stops the run at the failed task (reverted) and names the next rung; press Continue to run that task on it. `off`, or no `CODER_LADDER`, is the single-coder behavior of before: no ladder state, no cost cap.
+- **`MAX_PLAN_COST`.** The real cost Aider prints (`Cost: $X message`) is summed over every coder run of the plan. It is checked before each attempt on a cloud rung; when reached, the run stops and reports the spend and the task. Local attempts never count against it and are not blocked. A cloud attempt whose cost cannot be parsed (timeout, crash) is counted as a $0.10 estimate and logged, and the spend is then shown with `~`. One attempt may overshoot the cap. The total is stored with the plan and survives Continue and a controller restart; to spend more, raise `MAX_PLAN_COST` in `.env` and restart the controller.
+- **`ESCALATE_LOCAL_ONLY=on`.** Keeps only local rungs (`ollama`/`lmstudio`, not an Ollama `:cloud` model). If the starting coder runs in the cloud, the run fails with a clear message instead of switching.
+- **Bad configuration fails clearly.** An unknown provider, a malformed or duplicate entry, a cloud rung without `OPENAI_API_KEY`, or a non-loopback local server fails the run (and the Continue request) naming the entry. No rung is skipped and nothing falls back to another provider. Each rung's Aider process gets only that rung's credentials. The edit format follows the rung (`whole` local, `diff` cloud) unless `CODER_EDIT_FORMAT` is set.
+- **What you see.** Each task shows the rung that ran it in the task list (`↑` when it escalated), the task log lists lines like `gpt-6.1-terra, after qwen2.5-coder:7b failed lint: 'x' is not defined`, the running status shows spend against the cap, and the coder badge shows the model that actually ran last.
+
+Not built: planner size tags that skip weak rungs, learning from history, a UI to edit the ladder.
 
 ## Model providers
 

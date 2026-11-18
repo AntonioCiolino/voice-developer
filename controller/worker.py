@@ -1,11 +1,13 @@
 import asyncio
 import subprocess
+from dataclasses import dataclass
 
 from controller import config, state
 from controller.coder import (
     CoderEngineNotImplemented,
     build_coder_command,
     extract_cost,
+    extract_cost_amount,
     resolve_aider_bin,
     resolve_coder_edit_format,
     resolve_coder_engine,
@@ -14,6 +16,7 @@ from controller.coder import (
     resolve_task_validation,
     resolve_validation_timeout,
 )
+from controller.escalation import UNPARSED_CLOUD_COST, resolve_escalation
 from controller.planning import parse_task_files
 from controller.providers import (
     PlannerConfigurationError,
@@ -138,7 +141,8 @@ def tail(value, limit: int = LOG_TAIL_LIMIT) -> str:
 
 
 def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: int | None = None,
-                      files: list[str] | None = None, validation_errors: str = "") -> str:
+                      files: list[str] | None = None, validation_errors: str = "",
+                      previous_failure: str = "") -> str:
     """Prompt for one task. Scoped so the coder does only this task, with a minimal edit.
 
     The full plan is deliberately not included: given every task, small models tend to
@@ -168,6 +172,10 @@ def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: i
         + "The current files already contain that attempt. Fix only these errors, keeping the change minimal "
         + "and keeping the rest of the task as it is:\n" + validation_errors
     ) if validation_errors else ""
+    earlier_block = (
+        "\n\nAn earlier attempt at this task with another model failed and was reverted, so the files are back "
+        + "to their state before the task. Here is why it failed; avoid the same mistake:\n" + previous_failure[:1500]
+    ) if previous_failure else ""
     return (
         f"Overall goal (context only): {job['prompt']}\n\n"
         + "Architecture: pure React + Vite SPA. No backend server, no express/fastapi, "
@@ -190,6 +198,7 @@ def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: i
         + "under src/ and wire it in with an import and a few lines, instead of growing an existing file.\n"
         + "- Do not ask clarifying questions or request additional files; use the files provided."
         + fix_block
+        + earlier_block
     )
 
 
@@ -223,6 +232,170 @@ def _record_coder(job: dict, planner, coder) -> None:
     roles['local_only'] = planner_local and coder.is_local
 
 
+@dataclass
+class TaskFailure:
+    """Why one rung attempt failed. `message` is the text a failed run shows (today's wording)."""
+    kind: str
+    summary: str
+    detail: str
+    message: str
+    escalate: bool
+
+
+@dataclass
+class RunContext:
+    engine: str
+    timeout: int
+    max_lines: int
+    checks: object
+    val_timeout: int
+    active: bool
+
+
+def _first_line(text: str, limit: int = 160) -> str:
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    return line[:limit]
+
+
+def _charge(job: dict, i: int, rung, output: str, active: bool, costs: list[str]) -> None:
+    """Record an attempt's cost: the display string always, the plan total when the ladder is active."""
+    shown = extract_cost(output)
+    amount = extract_cost_amount(output)
+    estimated = False
+    if active and amount is None and not rung.provider.is_local:
+        amount, estimated = UNPARSED_CLOUD_COST, True
+        job['plan_cost_estimated'] = True
+        line = f"cost not reported by Aider; counted ${UNPARSED_CLOUD_COST:.2f} estimate"
+        job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + line
+    if shown:
+        costs.append(shown)
+    elif estimated:
+        costs.append(f"~${UNPARSED_CLOUD_COST:.2f}")
+    job['task_costs'][i] = " + ".join(costs)
+    if active:
+        job['plan_cost'] = round(float(job.get('plan_cost') or 0.0) + (amount or 0.0), 6)
+    save_job(job['id'])
+
+
+def _cap_message(job: dict, esc, i: int, last: str) -> str:
+    estimated = " (estimated parts included)" if job.get('plan_cost_estimated') else ""
+    return (f"Stopped at task {i+1}: plan cost ${job['plan_cost']:.2f} reached MAX_PLAN_COST "
+            f"${esc.max_plan_cost:.2f}{estimated}; not escalating further. Last attempt: {last}")
+
+
+async def _run_rung_attempt(job_id: str, i: int, rung, ctx: RunContext, box: dict,
+                            previous_failure: str, escalated: bool) -> TaskFailure | None:
+    """One rung's attempt at task i: the coder run plus, on build/lint failure, the one fix retry.
+
+    Returns None on success, else why it failed. It never reverts; the caller does.
+    box carries "snapshot" (set here) and "costs" (the task's cost display parts).
+    """
+    job = state.jobs[job_id]
+    provider = rung.provider
+    edit_format = resolve_coder_edit_format(provider=provider)
+    n = len(job['tasks'])
+    validation_errors = ""
+    scope_files: list[str] = []
+    for attempt in (1, 2):
+        prefix = job['task_logs'][i] + "\n" if (attempt == 2 or escalated) else ""
+        try:
+            if attempt == 1:
+                box['snapshot'] = snapshot_task_scope()
+                # Only the files this task names (plus their importers); no named file -> all src files.
+                scope_files = [str(f.relative_to(config.REPO_ROOT))
+                               for f in task_scope_files(parse_task_files(job['tasks'][i]))]
+                files = scope_files
+            else:
+                # Retry on the current files: also hand over files the first attempt created.
+                files = scope_files + [
+                    rel for rel in (str((config.APP_ROOT / p).relative_to(config.REPO_ROOT))
+                                    for p in changed_task_paths(box['snapshot']) if (config.APP_ROOT / p).is_file())
+                    if rel not in scope_files
+                ]
+            prompt = build_task_prompt(job, i, edit_format, ctx.max_lines, files, validation_errors,
+                                       previous_failure)
+            command = build_coder_command(ctx.engine, provider, prompt, files, edit_format)
+            result = await run_coder_streaming(job_id, i, command, provider, ctx.timeout, prefix)
+        except CoderEngineNotImplemented as exc:
+            return TaskFailure("engine", "engine not implemented", str(exc), str(exc), False)
+        except subprocess.TimeoutExpired as exc:
+            message = f"Task {i+1} timed out after {ctx.timeout} s (CODER_TIMEOUT_SECONDS)"
+            message += " (retry after validation failure)." if attempt == 2 else "."
+            partial = tail(exc.stderr) or tail(exc.stdout)
+            job['task_logs'][i] = tail(prefix + text_of(exc.stdout))
+            if partial:
+                message += f"\nPartial output:\n{partial}"
+            _charge(job, i, rung, text_of(exc.stdout) + "\n" + text_of(exc.stderr), ctx.active, box['costs'])
+            return TaskFailure("timeout", f"timed out after {ctx.timeout} s",
+                               f"It timed out after {ctx.timeout} s." + (f"\nPartial output:\n{partial}" if partial else ""),
+                               message, True)
+        except FileNotFoundError as exc:
+            missing = (
+                f"aider not found at '{resolve_aider_bin()}'. Create it with: "
+                "python3 -m venv controller/aider-venv && "
+                "controller/aider-venv/bin/pip install aider-chat==0.86.2 (or set AIDER_BIN)"
+            ) if ctx.engine == "aider" else str(exc)
+            return TaskFailure("missing", "coder not found", missing, missing, False)
+        except Exception as exc:
+            message = f"Task {i+1} failed: {exc}"
+            return TaskFailure("error", f"failed: {exc}", message, message, False)
+        job['task_logs'][i] = tail(prefix + text_of(result.stdout))
+        _charge(job, i, rung, text_of(result.stdout), ctx.active, box['costs'])
+        if result.returncode != 0:
+            parts = [f"Task {i+1} failed (exit code {result.returncode})."]
+            if tail(result.stderr):
+                parts.append("stderr:\n" + tail(result.stderr))
+            if tail(result.stdout):
+                parts.append("stdout:\n" + tail(result.stdout))
+            message = "\n".join(parts)
+            return TaskFailure("exit", f"exited with code {result.returncode}", message, message, False)
+        app_jsx = config.APP_SRC / "App.jsx"
+        if app_jsx.exists():
+            content = app_jsx.read_text(errors='ignore')
+            if len(content) < 100 or 'export default' not in content:
+                message = f"Task {i+1} corrupted App.jsx; its changes were reverted"
+                return TaskFailure("corrupted", "corrupted App.jsx", message, message, True)
+        if _GAVE_UP_MARKER in text_of(result.stdout) + text_of(result.stderr):
+            # Some SEARCH blocks may have applied, but Aider stopped retrying the rest,
+            # so the edit is incomplete. Revert it rather than leave half a change.
+            output = "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr))
+            message = (f"Task {i+1} was only partly applied: Aider stopped after "
+                       "repeated SEARCH blocks that did not match the file. Its changes were reverted.\n" + output)
+            return TaskFailure("partial", "was only partly applied (Aider stopped after repeated SEARCH mismatches)",
+                               "It was only partly applied: Aider stopped after repeated SEARCH blocks that did "
+                               "not match the file.\n" + output, message, True)
+        unapplied = edit_failure_reason(result.stdout, result.stderr)
+        if unapplied and not changed_task_paths(box['snapshot']):
+            # Aider exits 0 even when the model call fails or no edit applies.
+            output = "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr))
+            message = f"Task {i+1} made no changes: {unapplied}\n" + output
+            return TaskFailure("no-edit", f"applied no edit ({unapplied})",
+                               f"It applied no edit: {unapplied}\n" + output, message, True)
+
+        def log_line(line: str, i=i) -> None:
+            job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + line
+            save_job(job_id)
+
+        try:
+            failures = await asyncio.get_running_loop().run_in_executor(
+                None, validate_app, box['snapshot'], ctx.checks, ctx.val_timeout, log_line)
+        except Exception as exc:  # a broken validator must not hide the coder's work as done
+            failures = [("validation", f"validation could not run: {exc}")]
+        if not failures:
+            return None
+        errors = "\n\n".join(f"{name} output:\n{output}" for name, output in failures)
+        if attempt == 1:
+            validation_errors = errors
+            log_line("Validation failed, retrying once with the errors...")
+            continue
+        names = "/".join(name for name, _ in failures)
+        message = f"Task {i+1} failed validation ({names}) after one retry:\n{errors}"
+        name, output = failures[0]
+        return TaskFailure("validation", f"failed {name}: {_first_line(output)}", errors, message,
+                           any(name in ("build", "lint") for name, _ in failures))
+    return None
+
+
 async def run_job(job_id: str) -> None:
     job = state.jobs[job_id]
     n = len(job['tasks'])
@@ -238,6 +411,7 @@ async def run_job(job_id: str) -> None:
         max_lines = resolve_max_file_lines()
         checks = resolve_task_validation()
         val_timeout = resolve_validation_timeout()
+        esc = resolve_escalation(provider)
     except PlannerConfigurationError as exc:
         job['status'] = 'failed'
         job['error'] = str(exc)
@@ -245,11 +419,20 @@ async def run_job(job_id: str) -> None:
         return
     job['engine'] = engine
     _record_coder(job, planner, provider)
+    if esc.active:
+        job['ladder'] = esc.info()
+        if not isinstance(job.get('task_rungs'), list) or len(job['task_rungs']) != n:
+            job['task_rungs'] = [None] * n
+        job.setdefault('plan_cost', 0.0)
+        job.setdefault('plan_cost_estimated', False)
+    else:
+        job.pop('ladder', None)
     save_job(job_id)
     try:
         ensure_app_repo_hygiene()
     except Exception:
         pass  # hygiene is best-effort; never block a run on it
+    ctx = RunContext(engine, timeout, max_lines, checks, val_timeout, esc.active)
 
     for i in range(n):
         if job['task_statuses'][i] == 'done':
@@ -259,104 +442,71 @@ async def run_job(job_id: str) -> None:
         job['task_errors'][i] = ""
         job['task_warnings'][i] = ""
         save_job(job_id)
-        snapshot = None
-        costs: list[str] = []
-        validation_errors = ""
-        scope_files: list[str] = []
-        for attempt in (1, 2):
-            prefix = job['task_logs'][i] + "\n" if attempt == 2 else ""
-            try:
-                if attempt == 1:
-                    snapshot = snapshot_task_scope()
-                    # Only the files this task names (plus their importers); no named file -> all src files.
-                    scope_files = [str(f.relative_to(config.REPO_ROOT))
-                                   for f in task_scope_files(parse_task_files(job['tasks'][i]))]
-                    files = scope_files
-                else:
-                    # Retry on the current files: also hand over files the first attempt created.
-                    files = scope_files + [
-                        rel for rel in (str((config.APP_ROOT / p).relative_to(config.REPO_ROOT))
-                                        for p in changed_task_paths(snapshot) if (config.APP_ROOT / p).is_file())
-                        if rel not in scope_files
-                    ]
-                prompt = build_task_prompt(job, i, edit_format, max_lines, files, validation_errors)
-                command = build_coder_command(engine, provider, prompt, files, edit_format)
-                result = await run_coder_streaming(job_id, i, command, provider, timeout, prefix)
-            except CoderEngineNotImplemented as exc:
-                _fail_task(job_id, i, snapshot, str(exc))
+        box = {"snapshot": None, "costs": []}
+        start, previous_failure, history = 0, "", []
+        suggestion = job.get('suggested_rung')
+        if esc.active and isinstance(suggestion, dict) and suggestion.get('task') == i:
+            job['suggested_rung'] = None
+            specs = [r.spec for r in esc.rungs]
+            if suggestion.get('spec') in specs:
+                start = specs.index(suggestion['spec'])
+                previous_failure = suggestion.get('previous_failure', "")
+                if suggestion.get('history'):
+                    history = [suggestion['history']]
+            else:
+                job['task_logs'][i] = (f"Suggested rung {suggestion.get('spec')} is no longer in the ladder; "
+                                       f"starting on {esc.rungs[0].label}.")
+        failure = None
+        failure_label = ""
+        for r in range(start, len(esc.rungs)):
+            rung = esc.rungs[r]
+            if esc.active and not rung.provider.is_local and job['plan_cost'] >= esc.max_plan_cost:
+                last = f"{failure_label} {failure.summary}" if failure else "none yet"
+                _fail_task(job_id, i, None, _cap_message(job, esc, i, last))
                 return
-            except subprocess.TimeoutExpired as exc:
-                message = f"Task {i+1} timed out after {timeout} s (CODER_TIMEOUT_SECONDS)"
-                message += " (retry after validation failure)." if attempt == 2 else "."
-                partial = tail(exc.stderr) or tail(exc.stdout)
-                job['task_logs'][i] = tail(prefix + text_of(exc.stdout))
-                if partial:
-                    message += f"\nPartial output:\n{partial}"
-                _fail_task(job_id, i, snapshot, message)
-                return
-            except FileNotFoundError as exc:
-                missing = (
-                    f"aider not found at '{resolve_aider_bin()}'. Create it with: "
-                    "python3 -m venv controller/aider-venv && "
-                    "controller/aider-venv/bin/pip install aider-chat==0.86.2 (or set AIDER_BIN)"
-                ) if engine == "aider" else str(exc)
-                _fail_task(job_id, i, snapshot, missing)
-                return
-            except Exception as exc:
-                _fail_task(job_id, i, snapshot, f"Task {i+1} failed: {exc}")
-                return
-            job['task_logs'][i] = tail(prefix + text_of(result.stdout))
-            cost = extract_cost(result.stdout)
-            if cost:
-                costs.append(cost)
-            job['task_costs'][i] = " + ".join(costs)
-            if result.returncode != 0:
-                parts = [f"Task {i+1} failed (exit code {result.returncode})."]
-                if tail(result.stderr):
-                    parts.append("stderr:\n" + tail(result.stderr))
-                if tail(result.stdout):
-                    parts.append("stdout:\n" + tail(result.stdout))
-                _fail_task(job_id, i, snapshot, "\n".join(parts))
-                return
-            app_jsx = config.APP_SRC / "App.jsx"
-            if app_jsx.exists():
-                content = app_jsx.read_text(errors='ignore')
-                if len(content) < 100 or 'export default' not in content:
-                    _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
-                    return
-            if _GAVE_UP_MARKER in text_of(result.stdout) + text_of(result.stderr):
-                # Some SEARCH blocks may have applied, but Aider stopped retrying the rest,
-                # so the edit is incomplete. Revert it rather than leave half a change.
-                _fail_task(job_id, i, snapshot, f"Task {i+1} was only partly applied: Aider stopped after "
-                           "repeated SEARCH blocks that did not match the file. Its changes were reverted.\n"
-                           + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
-                return
-            unapplied = edit_failure_reason(result.stdout, result.stderr)
-            if unapplied and not changed_task_paths(snapshot):
-                # Aider exits 0 even when the model call fails or no edit applies.
-                _fail_task(job_id, i, snapshot, f"Task {i+1} made no changes: {unapplied}\n"
-                           + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
-                return
-
-            def log_line(line: str, i=i) -> None:
-                job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + line
+            if esc.active:
+                _record_coder(job, planner, rung.provider)
+                job['task_rungs'][i] = {**rung.info(), "history": list(history)}
+                if history:
+                    job['task_logs'][i] = "\n".join(history)
                 save_job(job_id)
-
-            try:
-                failures = await asyncio.get_running_loop().run_in_executor(
-                    None, validate_app, snapshot, checks, val_timeout, log_line)
-            except Exception as exc:  # a broken validator must not hide the coder's work as done
-                failures = [("validation", f"validation could not run: {exc}")]
-            if not failures:
+            failure = await _run_rung_attempt(job_id, i, rung, ctx, box, previous_failure, bool(history))
+            if failure is None:
                 break
-            errors = "\n\n".join(f"{name} output:\n{output}" for name, output in failures)
-            if attempt == 1:
-                validation_errors = errors
-                log_line("Validation failed, retrying once with the errors...")
-                continue
-            names = "/".join(name for name, _ in failures)
-            _fail_task(job_id, i, snapshot, f"Task {i+1} failed validation ({names}) after one retry:\n{errors}")
-            return
+            failure_label = rung.label
+            if not (esc.active and failure.escalate):
+                _fail_task(job_id, i, box['snapshot'], failure.message)
+                return
+            if r + 1 >= len(esc.rungs):
+                names = ", ".join(x.label for x in esc.rungs)
+                count = f"{len(esc.rungs)} rung" + ("" if len(esc.rungs) == 1 else "s")
+                _fail_task(job_id, i, box['snapshot'],
+                           f"Task {i+1} failed on all {count} ({names}). Last failure on {rung.label}:\n"
+                           + failure.message)
+                return
+            nxt = esc.rungs[r + 1]
+            line = f"{nxt.label}, after {rung.label} {failure.summary}"
+            if esc.mode == 'suggest':
+                if not nxt.provider.is_local and job['plan_cost'] >= esc.max_plan_cost:
+                    _fail_task(job_id, i, box['snapshot'],
+                               _cap_message(job, esc, i, f"{rung.label} {failure.summary}"))
+                    return
+                job['suggested_rung'] = {"task": i, "spec": nxt.spec, "label": nxt.label,
+                                         "previous_failure": failure.detail[-1500:], "history": line}
+                _fail_task(job_id, i, box['snapshot'],
+                           f"Task {i+1} failed on {rung.label} ({failure.summary}). "
+                           f"Suggested next: {nxt.label} ({nxt.spec}). Press Continue to retry it there.")
+                return
+            try:
+                note = revert_task(box['snapshot']) if box['snapshot'] is not None else ""
+            except Exception as exc:  # keep the original failure visible
+                note = f"revert failed: {exc}"
+            history.append(line)
+            job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + (
+                "Reverted this task's changes" + (f" ({note})" if note else " (nothing to undo)") + "\n" + line)
+            previous_failure = failure.detail[-1500:]
+            save_job(job_id)
+        snapshot = box['snapshot']
         try:
             note = commit_task(snapshot, f"Task {i+1}/{n}: {job['tasks'][i]}"[:200])
         except Exception as exc:

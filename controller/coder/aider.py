@@ -45,3 +45,9 @@ def build_aider_command(
 def extract_cost(log: str) -> str:
     m = re.search(r'Cost:\s*(\$[\d.]+)\s*message', log)
     return m.group(1) if m else ''
+
+
+def extract_cost_amount(log: str) -> float | None:
+    """Sum of every `Cost: $X message` figure in the output, or None when Aider printed none."""
+    amounts = re.findall(r'Cost:\s*\$(\d+(?:\.\d+)?)\s*message', log or "")
+    return round(sum(float(a) for a in amounts), 6) if amounts else None

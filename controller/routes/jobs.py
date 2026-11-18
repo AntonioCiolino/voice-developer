@@ -8,6 +8,7 @@ from controller.coder import (
     resolve_coder_engine,
     resolve_coder_timeout,
 )
+from controller.escalation import resolve_escalation
 from controller.providers import PlannerConfigurationError, resolve_roles
 from controller.store import save_job
 
@@ -47,7 +48,8 @@ async def _enqueue_job(job_id: str) -> dict:
     if not job['tasks']:
         raise HTTPException(status_code=409, detail="This plan has no tasks to run")
     try:
-        resolve_roles()
+        _, coder = resolve_roles()
+        resolve_escalation(coder)
         engine = resolve_coder_engine()
         resolve_coder_timeout()
         resolve_coder_edit_format()

@@ -1,4 +1,4 @@
-from controller.coder.aider import AIDER_VENV_BIN, build_aider_command, extract_cost, resolve_aider_bin
+from controller.coder.aider import AIDER_VENV_BIN, build_aider_command, extract_cost, extract_cost_amount, resolve_aider_bin
 from controller.coder.base import (
     DEFAULT_CODER_TIMEOUT_SECONDS,
     CoderEngineNotImplemented,
