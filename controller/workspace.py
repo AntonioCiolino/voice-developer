@@ -79,6 +79,59 @@ def task_scope_files(task_files: list[str] | None = None) -> list[pathlib.Path]:
     return files
 
 
+def imports_of(files: list[pathlib.Path]) -> list[pathlib.Path]:
+    """Existing src/ files that the given files import directly (one level, relative imports)."""
+    found = []
+    for f in files:
+        if not f.is_file() or f.suffix not in _CODE_EXTS:
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+        except OSError:
+            continue
+        for spec in _IMPORT_RE.findall(text):
+            if not spec.startswith("."):
+                continue
+            for candidate in sorted(_resolve_import(f, spec)):
+                if candidate.is_file() and config.APP_SRC in candidate.parents and candidate not in found:
+                    found.append(candidate)
+                    break
+    return found
+
+
+# Read-only reference files per task: enough for a few small modules, small enough for a local model.
+REFERENCE_MAX_FILES = 8
+REFERENCE_MAX_BYTES = 24_000
+
+
+def reference_files(editable: list[pathlib.Path], earlier_task_files: list[str]) -> list[pathlib.Path]:
+    """Files the coder may read but not edit for one task, so it uses their real names and APIs.
+
+    The files the editable ones import, then the files earlier tasks of the same plan named
+    (newest task first). Without them a task that creates a new file sees none of the
+    modules earlier tasks just wrote, and guesses their exports (e.g. expecting `hud` from
+    a hook that returns `status`). Only existing src/ files, none of the editable ones, at
+    most REFERENCE_MAX_FILES files and REFERENCE_MAX_BYTES bytes in total.
+    """
+    editable_set = {pathlib.Path(os.path.normpath(p)) for p in editable}
+    candidates = imports_of(editable)
+    for rel in reversed(earlier_task_files):
+        candidates.append(config.APP_ROOT / rel)
+    chosen, total = [], 0
+    for f in candidates:
+        f = pathlib.Path(os.path.normpath(f))
+        if f in editable_set or f in chosen or not f.is_file() or config.APP_SRC not in f.parents:
+            continue
+        size = f.stat().st_size
+        if size == 0 or total + size > REFERENCE_MAX_BYTES:
+            continue
+        chosen.append(f)
+        total += size
+        if len(chosen) >= REFERENCE_MAX_FILES:
+            break
+    return chosen
+
+
 def git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=str(config.APP_ROOT), capture_output=True, text=True)
 
@@ -167,6 +220,27 @@ def commit_task(snapshot: dict, message: str) -> str:
     if committed.returncode != 0:
         return f"commit skipped: {(committed.stderr or committed.stdout).strip()[-300:]}"
     return f"committed {len(paths)} file(s)"
+
+
+def commit_app_files(message: str) -> str:
+    """Commit everything under src/ plus index.html and package.json (after New App or Load).
+
+    Both replace the app's files wholesale. Without a commit, git still lists the old
+    files, Aider's repo map warns about each one ("deleted from the file system but not
+    from git?") and the next task's commit starts from the wrong base.
+    """
+    if not (config.APP_ROOT / ".git").exists():
+        return "no app repo, nothing committed"
+    paths = ["src"] + [p for p in ("index.html", "package.json") if (config.APP_ROOT / p).exists()]
+    added = git("add", "-A", "--", *paths)
+    if added.returncode != 0:
+        return f"commit skipped: git add failed: {added.stderr.strip()[-300:]}"
+    if not git("diff", "--cached", "--name-only", "--", *paths).stdout.strip():
+        return "no file changes to commit"
+    committed = git("commit", "-q", "-m", message, "--", *paths)
+    if committed.returncode != 0:
+        return f"commit skipped: {(committed.stderr or committed.stdout).strip()[-300:]}"
+    return "committed"
 
 
 _APP_IGNORES = ("node_modules/", "dist/", ".vite/", ".DS_Store")

@@ -25,9 +25,14 @@ def resolve_aider_bin(env: dict[str, str] | None = None) -> str:
 
 
 def build_aider_command(
-    provider: PlannerProvider, task_prompt: str, files: list[str], edit_format: str = "diff"
+    provider: PlannerProvider, task_prompt: str, files: list[str], edit_format: str = "diff",
+    read_files: list[str] | None = None,
 ) -> list[str]:
-    """Build the queued Aider invocation for the selected provider."""
+    """Build the queued Aider invocation for the selected provider.
+
+    read_files are shown to the model in full but are read-only (Aider's --read).
+    """
+    read_args = [arg for path in (read_files or []) for arg in ("--read", path)]
     # Commits are made by the controller (commit_task), so Aider never asks the
     # model to write a commit message and never commits unrelated dirty files.
     return [
@@ -38,6 +43,7 @@ def build_aider_command(
         "--no-show-model-warnings",
         "--model-settings-file", str(AIDER_MODEL_SETTINGS),
         "--model", provider.aider_model, "--edit-format", edit_format,
+        *read_args,
         "--message", task_prompt, *files,
     ]
 

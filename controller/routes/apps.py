@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from controller import config
 from controller.schemas import LoadAppRequest, SaveRequest
+from controller.workspace import commit_app_files
 
 router = APIRouter()
 
@@ -157,6 +158,7 @@ def load_app(req: LoadAppRequest):
 
         # Saved folders made before names were validated may not be valid names; show none then.
         set_current_app(req.name if _APP_NAME_RE.match(req.name) else None)
+        commit_app_files(f"Load app {req.name}")
         return {"status": "ok", "message": f"Loaded app '{req.name}'", "name": current_app_name()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Load failed: {str(e)}")
@@ -251,6 +253,7 @@ export default function App() {
         )
 
         set_current_app(None)
+        commit_app_files("New app")
         return {
             "status": "ok",
             "message": "Fresh app created — ready to generate",

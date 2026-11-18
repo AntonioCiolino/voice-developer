@@ -36,6 +36,7 @@ from controller.workspace import (
     commit_task,
     over_limit_files,
     ensure_app_repo_hygiene,
+    reference_files,
     revert_task,
     snapshot_task_scope,
     task_scope_files,
@@ -185,7 +186,7 @@ def tail(value, limit: int = LOG_TAIL_LIMIT) -> str:
 
 def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: int | None = None,
                       files: list[str] | None = None, validation_errors: str = "",
-                      previous_failure: str = "") -> str:
+                      previous_failure: str = "", read_files: list[str] | None = None) -> str:
     """Prompt for one task. Scoped so the coder does only this task, with a minimal edit.
 
     The full plan is deliberately not included: given every task, small models tend to
@@ -229,6 +230,9 @@ def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: i
         + f"YOUR TASK, step {i+1} of {n}:\n  {tasks[i]}\n\n"
         + ("Files provided for this task (create a file named here if it does not exist): "
            + ", ".join(files) + "\n\n" if files else "")
+        + ("Read-only reference files (already in the app; do not edit them): " + ", ".join(read_files) + ". "
+           + "When your code imports or calls them, use exactly the names they export and the values "
+           + "their functions and hooks return. Do not guess or rename them.\n\n" if read_files else "")
         + ("Later steps (do NOT implement any of these now; they are done separately):\n"
            + "\n".join(later) + "\n\n" if later else "")
         + "Rules:\n"
@@ -358,15 +362,20 @@ async def _run_rung_attempt(job_id: str, i: int, rung, ctx: RunContext, box: dic
                     p for p in changed_task_paths(box['snapshot'])
                     if (config.APP_ROOT / p).is_file() and p not in scope_files
                 ]
+            # Read-only: what the task's files import, and what earlier done tasks of this plan wrote.
+            earlier = [rel for j in range(i) if job['task_statuses'][j] == 'done'
+                       for rel in parse_task_files(job['tasks'][j])]
+            read_files = [f.relative_to(config.APP_ROOT).as_posix()
+                          for f in reference_files([config.APP_ROOT / p for p in files], earlier)]
             prompt = build_task_prompt(job, i, edit_format, ctx.max_lines, files, validation_errors,
-                                       previous_failure)
+                                       previous_failure, read_files)
             if provider.server or provider.lan:
                 # Re-resolve the address (a .local name may have moved), then fail fast if it is down.
                 provider = fresh_provider(provider)
                 if not await asyncio.to_thread(probe_server, provider):
                     message = f"model server {provider.server} is not reachable"
                     return TaskFailure("unreachable", message, f"The {message}.", message, True)
-            command = build_coder_command(ctx.engine, provider, prompt, files, edit_format)
+            command = build_coder_command(ctx.engine, provider, prompt, files, edit_format, read_files)
             result = await run_coder_streaming(job_id, i, command, provider, ctx.timeout, prefix)
         except PlannerConfigurationError as exc:
             message = f"model server {provider.server} is not usable: {exc}"

@@ -16,11 +16,11 @@ from controller.providers import PlannerConfigurationError, PlannerProvider
 
 def build_coder_command(
     engine: str, provider: PlannerProvider, task_prompt: str, files: list[str],
-    edit_format: str = "diff",
+    edit_format: str = "diff", read_files: list[str] | None = None,
 ) -> list[str]:
     """Dispatch to the configured coder engine. OpenCode is a stub and never falls back."""
     if engine == "aider":
-        return build_aider_command(provider, task_prompt, files, edit_format)
+        return build_aider_command(provider, task_prompt, files, edit_format, read_files)
     if engine == "opencode":
         raise CoderEngineNotImplemented(OPENCODE_NOT_IMPLEMENTED)
     raise PlannerConfigurationError("CODER_ENGINE must be either 'aider' or 'opencode'")

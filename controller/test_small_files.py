@@ -175,12 +175,12 @@ class EditFormatTests(tpf.TempAppCase):
     def test_prompt_rules_follow_format(self):
         self.make_job(tpf.JOB_A, ["t1"])
         job = state.jobs[tpf.JOB_A]
-        whole = build_task_prompt(job, 0, "whole", 150, ["generated-app/src/App.jsx"])
+        whole = build_task_prompt(job, 0, "whole", 150, ["src/App.jsx"])
         diff = build_task_prompt(job, 0, "diff", 150)
         self.assertNotIn("SEARCH", whole)
         self.assertIn("in full", whole)
         self.assertIn("under 150 lines", whole)
-        self.assertIn("generated-app/src/App.jsx", whole)
+        self.assertIn("src/App.jsx", whole)
         self.assertIn("SEARCH", diff)
 
 
@@ -267,3 +267,97 @@ class MisplacedWriteTests(tpf.TempAppCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReferenceFileTests(tpf.TempAppCase):
+    """Each task sees, read-only, what its files import and what earlier tasks of the plan wrote."""
+
+    def rel(self, files):
+        return [f.relative_to(self.app).as_posix() for f in files]
+
+    def test_imports_then_earlier_tasks_newest_first(self):
+        from controller.workspace import reference_files
+        (self.src / "game").mkdir()
+        (self.src / "game" / "sim.js").write_text("export function sim() {}\n")
+        (self.src / "game" / "draw.js").write_text("export function draw() {}\n")
+        (self.src / "hook.js").write_text('import { sim } from "./game/sim";\nexport const h = sim;\n')
+        refs = reference_files([self.src / "hook.js"], ["src/game/draw.js", "src/game/sim.js", "src/hook.js"])
+        # sim.js from the import; draw.js from an earlier task; hook.js is editable, so not a reference.
+        self.assertEqual(self.rel(refs), ["src/game/sim.js", "src/game/draw.js"])
+
+    def test_missing_empty_outside_and_caps(self):
+        from controller import workspace
+        (self.src / "empty.js").write_text("")
+        (self.app / "index.html").write_text("<html></html>")
+        for n in range(4):
+            (self.src / f"m{n}.js").write_text("x" * 100)
+        earlier = ["src/missing.js", "src/empty.js", "index.html"] + [f"src/m{n}.js" for n in range(4)]
+        self.assertEqual(self.rel(workspace.reference_files([], earlier)),
+                         ["src/m3.js", "src/m2.js", "src/m1.js", "src/m0.js"])
+        with patch.object(workspace, "REFERENCE_MAX_FILES", 2):
+            self.assertEqual(len(workspace.reference_files([], earlier)), 2)
+        with patch.object(workspace, "REFERENCE_MAX_BYTES", 250):
+            self.assertEqual(self.rel(workspace.reference_files([], earlier)), ["src/m3.js", "src/m2.js"])
+
+    def test_second_task_reads_the_first_tasks_file(self):
+        """The tunnel game case: task 2 creates a file that uses the hook task 1 wrote."""
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            if len(calls) == 1:
+                (self.src / "useGame.js").write_text("export function useGame() { return { score: 0, shoot() {} }; }\n")
+                out = "Applied edit to src/useGame.js\n"
+            else:
+                (self.src / "Game.jsx").write_text(
+                    'import { useGame } from "./useGame";\nexport default function Game() { useGame(); return null; }\n')
+                out = "Applied edit to src/Game.jsx\n"
+            return SimpleNamespace(returncode=0, stdout=out, stderr="")
+        self.make_job(tpf.JOB_A, ["hook [files: src/useGame.js]", "game [files: src/Game.jsx]"])
+        with patch.object(subprocess, "run", run):
+            asyncio.run(run_job(tpf.JOB_A))
+        self.assertEqual(state.jobs[tpf.JOB_A]["task_statuses"], ["done", "done"])
+        first, second = calls[0], calls[1]
+        self.assertNotIn("--read", first)  # nothing earlier, and the new file imports nothing yet
+        self.assertEqual(second[second.index("--read") + 1], "src/useGame.js")
+        prompt = second[second.index("--message") + 1]
+        self.assertIn("Read-only reference files (already in the app; do not edit them): src/useGame.js.", prompt)
+        self.assertIn("use exactly the names they export", prompt)
+        self.assertEqual(second[second.index("--message") + 2:], ["src/Game.jsx"])  # still the only editable file
+
+
+class AppResetCommitTests(unittest.TestCase):
+    """New App and Load replace src/ wholesale; the app repo must record it."""
+
+    def setUp(self):
+        import pathlib
+        import tempfile
+        self.app = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.app, True)
+        (self.app / "src" / "old").mkdir(parents=True)
+        (self.app / "src" / "old" / "a.js").write_text("export const a = 1;\n")
+        (self.app / "notes.txt").write_text("not app code")
+        for p in (patch.object(config, "APP_ROOT", self.app), patch.object(config, "APP_SRC", self.app / "src")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.git("init", "-q")
+        self.git("-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+        self.git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base")
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.app, capture_output=True, text=True,
+                              env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+    def test_reset_is_committed_and_other_files_are_left(self):
+        from controller.workspace import commit_app_files
+        shutil.rmtree(self.app / "src" / "old")
+        (self.app / "src" / "App.jsx").write_text("export default function App() { return null; }\n")
+        (self.app / "notes.txt").write_text("changed, not app code")
+        with patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}):
+            self.assertEqual(commit_app_files("New app"), "committed")
+            self.assertEqual(commit_app_files("New app"), "no file changes to commit")
+        self.assertEqual(self.git("ls-files").stdout.split(), ["notes.txt", "src/App.jsx"])
+        self.assertEqual(self.git("status", "--short").stdout.strip(), "M notes.txt")
+        self.assertEqual(self.git("log", "-1", "--format=%s").stdout.strip(), "New app")
