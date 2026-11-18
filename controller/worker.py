@@ -98,7 +98,7 @@ async def run_coder_streaming(job_id: str, i: int, command: list[str], provider,
             with open(log_path, "w") as log:
                 return subprocess.run(
                     command,
-                    cwd=str(config.REPO_ROOT),
+                    cwd=str(config.APP_ROOT),  # file arguments and the prompt are relative to the app
                     env=env,
                     stdout=log, stderr=subprocess.STDOUT, text=True, timeout=timeout,
                     stdin=subprocess.DEVNULL,
@@ -306,15 +306,17 @@ async def _run_rung_attempt(job_id: str, i: int, rung, ctx: RunContext, box: dic
             if attempt == 1:
                 box['snapshot'] = snapshot_task_scope()
                 # Only the files this task names (plus their importers); no named file -> all src files.
-                scope_files = [str(f.relative_to(config.REPO_ROOT))
+                # Paths are relative to the app (src/...), the way Aider shows them: the coder runs in
+                # generated-app/, so a generated-app/ prefix in the prompt would be copied into new
+                # file names and land in generated-app/generated-app/.
+                scope_files = [f.relative_to(config.APP_ROOT).as_posix()
                                for f in task_scope_files(parse_task_files(job['tasks'][i]))]
                 files = scope_files
             else:
                 # Retry on the current files: also hand over files the first attempt created.
                 files = scope_files + [
-                    rel for rel in (str((config.APP_ROOT / p).relative_to(config.REPO_ROOT))
-                                    for p in changed_task_paths(box['snapshot']) if (config.APP_ROOT / p).is_file())
-                    if rel not in scope_files
+                    p for p in changed_task_paths(box['snapshot'])
+                    if (config.APP_ROOT / p).is_file() and p not in scope_files
                 ]
             prompt = build_task_prompt(job, i, edit_format, ctx.max_lines, files, validation_errors,
                                        previous_failure)

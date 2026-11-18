@@ -192,10 +192,15 @@ class RunScopeTests(tpf.TempAppCase):
             asyncio.run(run_job(tpf.JOB_A))
         first, second = fake.calls[0][0], fake.calls[1][0]
         msg = first.index("--message") + 2
-        self.assertEqual(first[msg:], ["generated-app/src/util.js", "generated-app/src/New.jsx"])
+        # App-relative paths, run from the app folder: a generated-app/ prefix in the prompt got copied
+        # into new file names, which then landed in generated-app/generated-app/src.
+        self.assertEqual(first[msg:], ["src/util.js", "src/New.jsx"])
+        self.assertEqual(fake.calls[0][1]["cwd"], str(config.APP_ROOT))
+        self.assertNotIn("generated-app/", first[msg - 1])
+        self.assertIn("src/util.js, src/New.jsx", first[msg - 1])
         # No named file: all src files plus config, as before.
-        self.assertIn("generated-app/src/App.jsx", second)
-        self.assertIn("generated-app/index.html", second)
+        self.assertIn("src/App.jsx", second)
+        self.assertIn("index.html", second)
         self.assertEqual(state.jobs[tpf.JOB_A]["task_statuses"], ["done", "done"])
 
 

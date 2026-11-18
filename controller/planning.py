@@ -55,7 +55,8 @@ def planner_user_msg(prompt: str) -> str:
                 content = f.read_text(errors='ignore')
                 if len(content) > 2000:
                     content = content[:2000] + "\n... (truncated)"
-                src_snippets.append(f"### {f.relative_to(config.REPO_ROOT)}\n```\n{content}\n```")
+                # App-relative (src/...), matching the [files: ...] paths the planner must write.
+                src_snippets.append(f"### {f.relative_to(config.APP_ROOT).as_posix()}\n```\n{content}\n```")
             except Exception:
                 pass
     if src_snippets:
