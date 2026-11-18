@@ -183,6 +183,11 @@ class TempAppCase(unittest.TestCase):
         (self.src / "App.jsx").write_text(APP_JSX)
         (self.src / "util.js").write_text("export const a = 1;\n")
         (self.app / "index.html").write_text("<html></html>")
+        # Also done per test (not only in setUpModule) so subclasses imported into other
+        # test modules never read a real controller/model-selection.json.
+        sel = patch.object(selection, "SELECTION_PATH", self.tmp / "model-selection.json")
+        sel.start()
+        self.addCleanup(sel.stop)
         self.plans = self.tmp / "plans"
         for name, value in (("REPO_ROOT", self.root), ("APP_ROOT", self.app),
                             ("APP_SRC", self.src), ("PLANS_DIR", self.plans)):
