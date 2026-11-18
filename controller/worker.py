@@ -11,6 +11,8 @@ from controller.coder import (
     resolve_coder_engine,
     resolve_coder_timeout,
     resolve_max_file_lines,
+    resolve_task_validation,
+    resolve_validation_timeout,
 )
 from controller.planning import parse_task_files
 from controller.providers import (
@@ -21,6 +23,7 @@ from controller.providers import (
     roles_info,
 )
 from controller.store import save_job
+from controller.validation import validate_app
 from controller.workspace import (
     changed_task_paths,
     commit_task,
@@ -55,7 +58,8 @@ def _read_log(path) -> str:
         return ""
 
 
-async def run_coder_streaming(job_id: str, i: int, command: list[str], provider, timeout: int):
+async def run_coder_streaming(job_id: str, i: int, command: list[str], provider, timeout: int,
+                              prefix: str = ""):
     """Run the coder and copy its output into the task log while it runs.
 
     The coder writes stdout and stderr to a log file; a poller copies the file's tail
@@ -75,7 +79,7 @@ async def run_coder_streaming(job_id: str, i: int, command: list[str], provider,
         async def poll():
             last = None
             while not done.is_set():
-                text = tail(_read_log(log_path))
+                text = tail(prefix + _read_log(log_path))
                 if text and text != last:
                     job['task_logs'][i] = text
                     last = text
@@ -134,7 +138,7 @@ def tail(value, limit: int = LOG_TAIL_LIMIT) -> str:
 
 
 def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: int | None = None,
-                      files: list[str] | None = None) -> str:
+                      files: list[str] | None = None, validation_errors: str = "") -> str:
     """Prompt for one task. Scoped so the coder does only this task, with a minimal edit.
 
     The full plan is deliberately not included: given every task, small models tend to
@@ -159,6 +163,11 @@ def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: i
         )
     completed = [f"  - Task {j+1}: {tasks[j]}" for j in range(i) if job['task_statuses'][j] == 'done']
     later = [f"  - Task {j+1}: {tasks[j]}" for j in range(i + 1, n)]
+    fix_block = (
+        "\n\nYour previous attempt at this task left the app failing its build or lint check. "
+        + "The current files already contain that attempt. Fix only these errors, keeping the change minimal "
+        + "and keeping the rest of the task as it is:\n" + validation_errors
+    ) if validation_errors else ""
     return (
         f"Overall goal (context only): {job['prompt']}\n\n"
         + "Architecture: pure React + Vite SPA. No backend server, no express/fastapi, "
@@ -180,6 +189,7 @@ def build_task_prompt(job: dict, i: int, edit_format: str = "diff", max_lines: i
         + f"- Keep every file under {max_lines} lines. Put new components or logic in a new small file "
         + "under src/ and wire it in with an import and a few lines, instead of growing an existing file.\n"
         + "- Do not ask clarifying questions or request additional files; use the files provided."
+        + fix_block
     )
 
 
@@ -226,6 +236,8 @@ async def run_job(job_id: str) -> None:
         timeout = resolve_coder_timeout()
         edit_format = resolve_coder_edit_format(provider=provider)  # default follows the coder in use
         max_lines = resolve_max_file_lines()
+        checks = resolve_task_validation()
+        val_timeout = resolve_validation_timeout()
     except PlannerConfigurationError as exc:
         job['status'] = 'failed'
         job['error'] = str(exc)
@@ -248,65 +260,102 @@ async def run_job(job_id: str) -> None:
         job['task_warnings'][i] = ""
         save_job(job_id)
         snapshot = None
-        try:
-            snapshot = snapshot_task_scope()
-            # Only the files this task names (plus their importers); no named file -> all src files.
-            files = [str(f.relative_to(config.REPO_ROOT))
-                     for f in task_scope_files(parse_task_files(job['tasks'][i]))]
-            prompt = build_task_prompt(job, i, edit_format, max_lines, files)
-            command = build_coder_command(engine, provider, prompt, files, edit_format)
-            result = await run_coder_streaming(job_id, i, command, provider, timeout)
-        except CoderEngineNotImplemented as exc:
-            _fail_task(job_id, i, snapshot, str(exc))
-            return
-        except subprocess.TimeoutExpired as exc:
-            message = f"Task {i+1} timed out after {timeout} s (CODER_TIMEOUT_SECONDS)."
-            partial = tail(exc.stderr) or tail(exc.stdout)
-            job['task_logs'][i] = tail(exc.stdout)
-            if partial:
-                message += f"\nPartial output:\n{partial}"
-            _fail_task(job_id, i, snapshot, message)
-            return
-        except FileNotFoundError as exc:
-            missing = (
-                f"aider not found at '{resolve_aider_bin()}'. Create it with: "
-                "python3 -m venv controller/aider-venv && "
-                "controller/aider-venv/bin/pip install aider-chat==0.86.2 (or set AIDER_BIN)"
-            ) if engine == "aider" else str(exc)
-            _fail_task(job_id, i, snapshot, missing)
-            return
-        except Exception as exc:
-            _fail_task(job_id, i, snapshot, f"Task {i+1} failed: {exc}")
-            return
-
-        job['task_logs'][i] = tail(result.stdout)
-        job['task_costs'][i] = extract_cost(result.stdout)
-        if result.returncode != 0:
-            parts = [f"Task {i+1} failed (exit code {result.returncode})."]
-            if tail(result.stderr):
-                parts.append("stderr:\n" + tail(result.stderr))
-            if tail(result.stdout):
-                parts.append("stdout:\n" + tail(result.stdout))
-            _fail_task(job_id, i, snapshot, "\n".join(parts))
-            return
-        app_jsx = config.APP_SRC / "App.jsx"
-        if app_jsx.exists():
-            content = app_jsx.read_text(errors='ignore')
-            if len(content) < 100 or 'export default' not in content:
-                _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
+        costs: list[str] = []
+        validation_errors = ""
+        scope_files: list[str] = []
+        for attempt in (1, 2):
+            prefix = job['task_logs'][i] + "\n" if attempt == 2 else ""
+            try:
+                if attempt == 1:
+                    snapshot = snapshot_task_scope()
+                    # Only the files this task names (plus their importers); no named file -> all src files.
+                    scope_files = [str(f.relative_to(config.REPO_ROOT))
+                                   for f in task_scope_files(parse_task_files(job['tasks'][i]))]
+                    files = scope_files
+                else:
+                    # Retry on the current files: also hand over files the first attempt created.
+                    files = scope_files + [
+                        rel for rel in (str((config.APP_ROOT / p).relative_to(config.REPO_ROOT))
+                                        for p in changed_task_paths(snapshot) if (config.APP_ROOT / p).is_file())
+                        if rel not in scope_files
+                    ]
+                prompt = build_task_prompt(job, i, edit_format, max_lines, files, validation_errors)
+                command = build_coder_command(engine, provider, prompt, files, edit_format)
+                result = await run_coder_streaming(job_id, i, command, provider, timeout, prefix)
+            except CoderEngineNotImplemented as exc:
+                _fail_task(job_id, i, snapshot, str(exc))
                 return
-        if _GAVE_UP_MARKER in text_of(result.stdout) + text_of(result.stderr):
-            # Some SEARCH blocks may have applied, but Aider stopped retrying the rest,
-            # so the edit is incomplete. Revert it rather than leave half a change.
-            _fail_task(job_id, i, snapshot, f"Task {i+1} was only partly applied: Aider stopped after "
-                       "repeated SEARCH blocks that did not match the file. Its changes were reverted.\n"
-                       + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
-            return
-        unapplied = edit_failure_reason(result.stdout, result.stderr)
-        if unapplied and not changed_task_paths(snapshot):
-            # Aider exits 0 even when the model call fails or no edit applies.
-            _fail_task(job_id, i, snapshot, f"Task {i+1} made no changes: {unapplied}\n"
-                       + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
+            except subprocess.TimeoutExpired as exc:
+                message = f"Task {i+1} timed out after {timeout} s (CODER_TIMEOUT_SECONDS)"
+                message += " (retry after validation failure)." if attempt == 2 else "."
+                partial = tail(exc.stderr) or tail(exc.stdout)
+                job['task_logs'][i] = tail(prefix + text_of(exc.stdout))
+                if partial:
+                    message += f"\nPartial output:\n{partial}"
+                _fail_task(job_id, i, snapshot, message)
+                return
+            except FileNotFoundError as exc:
+                missing = (
+                    f"aider not found at '{resolve_aider_bin()}'. Create it with: "
+                    "python3 -m venv controller/aider-venv && "
+                    "controller/aider-venv/bin/pip install aider-chat==0.86.2 (or set AIDER_BIN)"
+                ) if engine == "aider" else str(exc)
+                _fail_task(job_id, i, snapshot, missing)
+                return
+            except Exception as exc:
+                _fail_task(job_id, i, snapshot, f"Task {i+1} failed: {exc}")
+                return
+            job['task_logs'][i] = tail(prefix + text_of(result.stdout))
+            cost = extract_cost(result.stdout)
+            if cost:
+                costs.append(cost)
+            job['task_costs'][i] = " + ".join(costs)
+            if result.returncode != 0:
+                parts = [f"Task {i+1} failed (exit code {result.returncode})."]
+                if tail(result.stderr):
+                    parts.append("stderr:\n" + tail(result.stderr))
+                if tail(result.stdout):
+                    parts.append("stdout:\n" + tail(result.stdout))
+                _fail_task(job_id, i, snapshot, "\n".join(parts))
+                return
+            app_jsx = config.APP_SRC / "App.jsx"
+            if app_jsx.exists():
+                content = app_jsx.read_text(errors='ignore')
+                if len(content) < 100 or 'export default' not in content:
+                    _fail_task(job_id, i, snapshot, f"Task {i+1} corrupted App.jsx; its changes were reverted")
+                    return
+            if _GAVE_UP_MARKER in text_of(result.stdout) + text_of(result.stderr):
+                # Some SEARCH blocks may have applied, but Aider stopped retrying the rest,
+                # so the edit is incomplete. Revert it rather than leave half a change.
+                _fail_task(job_id, i, snapshot, f"Task {i+1} was only partly applied: Aider stopped after "
+                           "repeated SEARCH blocks that did not match the file. Its changes were reverted.\n"
+                           + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
+                return
+            unapplied = edit_failure_reason(result.stdout, result.stderr)
+            if unapplied and not changed_task_paths(snapshot):
+                # Aider exits 0 even when the model call fails or no edit applies.
+                _fail_task(job_id, i, snapshot, f"Task {i+1} made no changes: {unapplied}\n"
+                           + "output:\n" + tail(text_of(result.stdout) + "\n" + text_of(result.stderr)))
+                return
+
+            def log_line(line: str, i=i) -> None:
+                job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + line
+                save_job(job_id)
+
+            try:
+                failures = await asyncio.get_running_loop().run_in_executor(
+                    None, validate_app, snapshot, checks, val_timeout, log_line)
+            except Exception as exc:  # a broken validator must not hide the coder's work as done
+                failures = [("validation", f"validation could not run: {exc}")]
+            if not failures:
+                break
+            errors = "\n\n".join(f"{name} output:\n{output}" for name, output in failures)
+            if attempt == 1:
+                validation_errors = errors
+                log_line("Validation failed, retrying once with the errors...")
+                continue
+            names = "/".join(name for name, _ in failures)
+            _fail_task(job_id, i, snapshot, f"Task {i+1} failed validation ({names}) after one retry:\n{errors}")
             return
         try:
             note = commit_task(snapshot, f"Task {i+1}/{n}: {job['tasks'][i]}"[:200])

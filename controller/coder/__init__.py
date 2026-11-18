@@ -6,6 +6,8 @@ from controller.coder.base import (
     resolve_coder_engine,
     resolve_max_file_lines,
     resolve_coder_timeout,
+    resolve_task_validation,
+    resolve_validation_timeout,
 )
 from controller.coder.opencode import OPENCODE_NOT_IMPLEMENTED, build_opencode_command
 from controller.providers import PlannerConfigurationError, PlannerProvider

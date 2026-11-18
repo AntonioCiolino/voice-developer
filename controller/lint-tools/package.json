@@ -1,0 +1,11 @@
+{
+  "name": "voice-developer-lint-tools",
+  "private": true,
+  "type": "module",
+  "description": "ESLint used by the controller to validate generated apps. Not part of the generated app.",
+  "dependencies": {
+    "eslint": "^9.0.0",
+    "eslint-plugin-react": "^7.37.0",
+    "globals": "^15.0.0"
+  }
+}

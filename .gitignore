@@ -12,6 +12,7 @@ generated-app/node_modules/
 generated-app/dist/
 generated-app/.vite/
 generated-app/package-lock.json
+controller/lint-tools/node_modules/
 
 # Saved app snapshots
 saved-apps/

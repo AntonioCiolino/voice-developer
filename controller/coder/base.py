@@ -11,6 +11,8 @@ class CoderEngineNotImplemented(RuntimeError):
 _CODER_ENGINES = ("aider", "opencode")
 _EDIT_FORMATS = ("diff", "diff-fenced", "udiff", "whole")
 DEFAULT_CODER_TIMEOUT_SECONDS = 120
+DEFAULT_VALIDATION_TIMEOUT_SECONDS = 120
+_VALIDATION_CHECKS = ("build", "lint")
 
 
 def resolve_coder_engine(env: dict[str, str] | None = None) -> str:
@@ -34,6 +36,35 @@ def resolve_coder_timeout(env: dict[str, str] | None = None) -> int:
         seconds = 0
     if seconds <= 0:
         raise PlannerConfigurationError("CODER_TIMEOUT_SECONDS must be a positive integer")
+    return seconds
+
+
+def resolve_task_validation(env: dict[str, str] | None = None) -> set[str]:
+    """TASK_VALIDATION: 'off' or a comma list of build, lint (default: build,lint)."""
+    values = os.environ if env is None else env
+    raw = values.get("TASK_VALIDATION", "").strip().lower()
+    if not raw:
+        return set(_VALIDATION_CHECKS)
+    if raw == "off":
+        return set()
+    checks = {part.strip() for part in raw.split(",")}
+    if not checks <= set(_VALIDATION_CHECKS):
+        raise PlannerConfigurationError("TASK_VALIDATION must be 'off' or a comma list of: build, lint")
+    return checks
+
+
+def resolve_validation_timeout(env: dict[str, str] | None = None) -> int:
+    """VALIDATION_TIMEOUT_SECONDS: timeout of each build or lint run, positive integer (default 120)."""
+    values = os.environ if env is None else env
+    raw = values.get("VALIDATION_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_VALIDATION_TIMEOUT_SECONDS
+    try:
+        seconds = int(raw)
+    except ValueError:
+        seconds = 0
+    if seconds <= 0:
+        raise PlannerConfigurationError("VALIDATION_TIMEOUT_SECONDS must be a positive integer")
     return seconds
 
 

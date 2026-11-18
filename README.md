@@ -24,7 +24,7 @@ From the repository root, run setup once:
 ./setup.sh
 ```
 
-`setup.sh` creates `controller/venv`, installs `controller/requirements.txt`, runs `npm install` in `generated-app`, and copies `controller/.env.example` to `controller/.env` only when that file does not already exist. It does not make model API calls. Fill in `controller/.env` before starting the app. Keep that file private; it is ignored by Git.
+`setup.sh` creates `controller/venv`, installs `controller/requirements.txt`, runs `npm install` in `generated-app` and in `controller/lint-tools` (the ESLint used for task validation), and copies `controller/.env.example` to `controller/.env` only when that file does not already exist. It does not make model API calls. Fill in `controller/.env` before starting the app. Keep that file private; it is ignored by Git.
 
 Set these values in `controller/.env` for the default OpenAI planner and Google sign-in:
 
@@ -163,6 +163,19 @@ Each clone has one active workspace. Browser tabs connected to the same controll
 - `planning.py`, `store.py`, `workspace.py`, `worker.py`: plan parsing and prompts, `plans/<id>.json` persistence, per-task snapshot/revert/commit, and the job worker.
 - `config.py` (paths, `.env`), `state.py` (in-memory jobs and queue), `ui.py` with `templates/phone.html` (the phone page).
 
+## Task validation
+
+After each task that changed files, and before it is committed, the controller runs two checks on the generated app:
+
+1. `vite build` with `--outDir` set to a temporary directory, so `generated-app/dist` and the app files are never touched. It runs for any change to a task-scope file, including `package.json`.
+2. ESLint on the changed or created `src/` `.js`/`.jsx` files, with `no-undef`, `react/jsx-no-undef` and `react/jsx-uses-vars` only (no style rules). This catches a name used without an import and a JSX component that is not defined. ESLint is installed in `controller/lint-tools` and run with the app as its working directory, so the generated app gets no lint dependencies and no config file.
+
+Both checks run even if the first fails. If either fails, the coder gets one retry on the current files with the error output in its prompt. If validation fails again, the task fails, its changes are reverted as for any failed task, the UI shows the build or lint output, and the run stops. The existing checks (exit code, `App.jsx`, partial apply, no-change) run first and fail the task immediately without a retry. The worst case for a task is two coder runs (each with its own `CODER_TIMEOUT_SECONDS`) plus two validations. The task log shows `Validating: build (vite)...`, `build passed`/`build FAILED`, and the same for lint. A task that changed nothing skips validation.
+
+If node, `generated-app/node_modules` or `controller/lint-tools/node_modules` is missing, the affected check is skipped with a log line telling you to run `./setup.sh`; the task is not failed. Settings in `controller/.env`: `TASK_VALIDATION` (`build,lint` by default, a subset, or `off`) and `VALIDATION_TIMEOUT_SECONDS` (default `120`, applies to each check). The retry count is fixed at one.
+
+Limit: these checks do not run the page. A runtime error such as reading a property of an undefined object still passes, and the page can still render blank.
+
 ## Small files
 
 The local coder (a 7B model) edits small files reliably and large ones badly, so the app is kept as many small files.
@@ -257,6 +270,7 @@ Optional coder settings in `controller/.env` (see `controller/.env.example`):
 
 - `CODER_TIMEOUT_SECONDS` is the per-task timeout, default `120`.
 - `CODER_EDIT_FORMAT` is the Aider edit format: `diff`, `diff-fenced`, `udiff`, or `whole`. When unset, the default follows the coder in use: `whole` for a local coder (`ollama`, `lmstudio`) and `diff` for a cloud coder (`openai`, or an Ollama `:cloud`/`-cloud` model, which runs remotely). The default is resolved at the start of each run from the coder actually selected, so a coder hot-swapped in the models panel gets its own default. Setting `CODER_EDIT_FORMAT` overrides it for every coder.
+- `TASK_VALIDATION` and `VALIDATION_TIMEOUT_SECONDS` control the post-task build and lint checks. See [Task validation](#task-validation).
 - `MAX_FILE_LINES` is the line limit per generated source file (default `150`, `.env` only). See [Small files](#small-files).
 - `AIDER_BIN` is the Aider executable. By default the controller uses `controller/aider-venv/bin/aider` (Aider 0.86.2, created by `./setup.sh`), falling back to `aider` on `PATH`. Aider lives in its own environment because its dependencies would otherwise replace the controller's pinned FastAPI, Pydantic and OpenAI versions. To create it by hand: `python3 -m venv controller/aider-venv && controller/aider-venv/bin/pip install aider-chat==0.86.2`.
 - `CODER_ENGINE` is `aider` (default) or `opencode`. OpenCode is a stub that defines the command (`opencode run --model <provider/model> --format json`, Ollama through an OpenAI-compatible `/v1` endpoint with a 64k+ context). Selecting it fails with "not implemented yet"; it never falls back to Aider or a cloud provider.

@@ -16,4 +16,6 @@ python3 -m venv "$CONTROLLER/venv"
 python3 -m venv "$CONTROLLER/aider-venv"
 "$CONTROLLER/aider-venv/bin/python" -m pip install "aider-chat==0.86.2"
 npm install --prefix "$ROOT/generated-app"
+# ESLint for post-task validation lives here, not in the generated app.
+npm install --prefix "$ROOT/controller/lint-tools"
 echo "Setup complete. Run ./start.sh after configuring controller/.env."
