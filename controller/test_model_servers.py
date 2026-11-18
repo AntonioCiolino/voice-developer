@@ -131,5 +131,11 @@ class ServerConfigTests(unittest.TestCase):
             resolve_server(values, "mini")
 
 
+class PhoneUiTests(unittest.TestCase):
+    def test_phone_ui_names_the_three_locations(self):
+        from controller.ui import render_phone_ui
+        html = render_phone_ui("Tester", False)
+        for text in ("Local network", "This machine", "uses_lan"):
+            self.assertIn(text, html)
 if __name__ == "__main__":
     unittest.main()

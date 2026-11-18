@@ -236,7 +236,9 @@
       const roles = provider && provider.roles;
       if (roles && roles.planner && roles.coder) {
         const part = (r) => `${r.label} ${r.model}`;
-        const prefix = roles.local_only ? 'Local-only: ' : '';
+        const anyCloud = [roles.planner, roles.coder].some(r => r.location === 'cloud');
+        const prefix = roles.local_only ? 'Local-only: '
+          : (!anyCloud && roles.uses_lan ? 'Local network: ' : '');
         document.getElementById('providerStatus').textContent =
           `${prefix}Planner: ${part(roles.planner)} | Coder: ${part(roles.coder)}`;
         return;
@@ -581,18 +583,21 @@
       const select = document.getElementById(`cfg-${role}-model`);
       select.textContent = '';
       const models = (info && info.available && info.models) || [];
-      const local = document.createElement('optgroup');
-      local.label = 'Local';
-      const cloud = document.createElement('optgroup');
-      cloud.label = info && info.name === 'openai' ? 'Cloud' : 'Cloud via Ollama';
+      const groups = {
+        local: document.createElement('optgroup'),
+        lan: document.createElement('optgroup'),
+        cloud: document.createElement('optgroup'),
+      };
+      groups.local.label = 'This machine';
+      groups.lan.label = 'Local network';
+      groups.cloud.label = 'Cloud';
       models.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = m.location === 'cloud' ? `☁ ${m.label || m.id}` : (m.label || m.id);
-        (m.location === 'cloud' ? cloud : local).appendChild(opt);
+        (groups[m.location] || groups.local).appendChild(opt);
       });
-      if (local.children.length) select.appendChild(local);
-      if (cloud.children.length) select.appendChild(cloud);
+      ['local', 'lan', 'cloud'].forEach(k => { if (groups[k].children.length) select.appendChild(groups[k]); });
       if (selectedModel && models.some(m => m.id === selectedModel)) select.value = selectedModel;
       const err = document.getElementById(`cfg-${role}-err`);
       err.textContent = info ? (info.available ? '' : (info.error || 'Not available')) : '';
@@ -628,7 +633,7 @@
         configFillModels(role, current && current.model);
         const tag = document.getElementById(`cfg-${role}-tag`);
         tag.textContent = current
-          ? `${current.location === 'cloud' ? 'Cloud' : 'Local'} · ${current.source === 'ui' ? 'chosen here' : 'from .env'}`
+          ? `${{ cloud: 'Cloud', lan: 'Local network' }[current.location] || 'This machine'} · ${current.source === 'ui' ? 'chosen here' : 'from .env'}`
           : '';
       });
       if (data.config_error) configMessage(data.config_error, 'err');

@@ -199,12 +199,17 @@ Plan uses two independently configured roles, set in `controller/.env` or chosen
 | `CODER_MODEL` | Coder (Aider) model | `OPENAI_MODEL`, `OLLAMA_MODEL`, or `LMSTUDIO_MODEL`, by coder provider |
 | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_API_BASE` | Existing settings; shared by both roles | unchanged |
 | `LMSTUDIO_MODEL`, `LMSTUDIO_API_BASE` | LM Studio model identifier and local server URL; shared by both roles | no model; `http://127.0.0.1:1234` |
+| `ALLOW_LAN_MODEL_SERVERS` | `on` lets a named model server be on your local network | `off` |
+| `MODEL_SERVERS` | Comma list of model server names, e.g. `mini,studio` | none |
+| `MODEL_SERVER_<NAME>_KIND`, `MODEL_SERVER_<NAME>_URL` | Per server: `lmstudio` or `ollama`, and its `http://` address | required for each named server |
+| `ESCALATE_LOCAL_ONLY` | Ladder scope: `off`, `on` (this machine only), `lan` (never cloud) | `off` |
 Existing `.env` files that set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL` behave exactly as before. An empty value counts as unset. Both roles share one `OLLAMA_API_BASE`, which must be loopback (`localhost`, `127.0.0.1`, or `::1`), and one `OPENAI_API_KEY`.
 
 ### Models panel (hot swap)
 
 The ⚙ button next to ⓘ opens a panel with a provider and model dropdown for the planner and for the coder. Providers are LM Studio (local), Ollama (local) and OpenAI (cloud). Local models are listed live from the running servers; OpenAI models come from `OPENAI_MODELS` (comma list) plus `OPENAI_MODEL`, `PLANNER_MODEL` and `CODER_MODEL` in `.env`. Ollama models ending in `:cloud` or `-cloud` stay on the Ollama provider but are labeled cloud, and the "Local-only" badge turns off when a role uses one.
 
+- Each model is labeled by where it runs: **This machine**, **Local network** (a named model server on your LAN) or **Cloud**. The badge reads `Local-only:` when both roles run on this machine (unchanged for loopback-only setups), `Local network:` when neither role is cloud and at least one runs on the LAN, and has no prefix when a role is cloud. The panel and API never show a server address.
 - Precedence per role: panel choice, then `.env`, then defaults. With nothing chosen, behavior is exactly the `.env` behavior.
 - **Save** writes only `{provider, model}` per role to `controller/model-selection.json` (ignored by Git), so the choice survives a restart. **Use .env** deletes that file.
 - The planner applies from the next **Plan**. The coder is resolved when a run starts: a running plan finishes on the coder it started with, and the new coder applies from the next run (Continue or a new plan).
@@ -252,6 +257,24 @@ Example combinations:
 
 Credential isolation per role: an `ollama` Aider process gets a small allowlist of environment variables plus `OLLAMA_API_BASE`. An `openai` Aider process gets the same allowlist plus `OPENAI_API_KEY`, optional `OPENAI_API_BASE`/`OPENAI_BASE_URL`/`OPENAI_ORG_ID`, and proxy and certificate variables. It does not inherit unrelated secrets such as `ANTHROPIC_API_KEY`, `GOOGLE_CLIENT_SECRET`, or `SESSION_SECRET`. The controller badge shows planner and coder provider and model separately and shows `Local-only` only when both are local (`ollama` or `lmstudio`).
 
+### Model servers on your network
+A model server is another computer running LM Studio, Ollama or an OpenAI-compatible server such as MTPLX. It is off by default. Worked example with a Mac mini:
+1. In LM Studio on the mini, load the model and turn on **Serve on local network** (Developer tab).
+2. On the mini, find its name with `scutil --get LocalHostName`. Its address is `<name>.local`, which stays valid when its IP changes.
+3. In `controller/.env`:
+   ```
+   ALLOW_LAN_MODEL_SERVERS=on
+   MODEL_SERVERS=mini
+   MODEL_SERVER_MINI_KIND=lmstudio
+   MODEL_SERVER_MINI_URL=http://r2m2-mini.local:1234
+   ```
+4. Restart the controller, then pick **LM Studio on mini** and its model in the ⚙ panel, or set `CODER_PROVIDER=mini` and `CODER_MODEL=<model id>`. The model is always required for a named server. In a ladder use `mini:<model>`, e.g. `CODER_LADDER=lmstudio:qwen2.5-coder-7b-instruct,mini:mlx-community/qwen3.5-4b-mlx-4bit,openai:gpt-6-luna`.
+MTPLX serves an OpenAI-compatible API, so it is a `lmstudio` kind server: `MODEL_SERVER_MTPLX_KIND=lmstudio`, `MODEL_SERVER_MTPLX_URL=http://r2m2-mini.local:8000`, and the model id is the one the server lists.
+- **Security.** LM Studio and MTPLX servers have no login, so anyone on the network can use them. Use only a network you trust. Only private addresses (10.x, 172.16-31.x, 192.168.x) and `.local` names are accepted. A `.local` name is looked up again on every use and the validated address is used for that connection. A public address is an error, never a fallback. `LMSTUDIO_API_BASE` and `OLLAMA_API_BASE` stay loopback-only.
+- **`local_only`** (the `Local-only:` badge) means both roles run on this machine. A LAN server is never `local_only`.
+- **Removed server.** If a saved panel choice names a server you removed from `MODEL_SERVERS` (or `ALLOW_LAN_MODEL_SERVERS` is off), the panel shows a configuration error and runs fail with the same message. Nothing falls back. Add the server back, or use **Use .env** to clear the choice.
+- **Unreachable server.** Before each attempt on a network rung the server is looked up again and probed (2 s). If it does not answer, that rung fails as unreachable and the ladder moves to the next rung. A single coder fails the task with `model server <name> is not reachable`.
+- **`ESCALATE_LOCAL_ONLY`.** `off` allows every rung. `on` keeps this machine only and drops network rungs. `lan` keeps this machine and network rungs and never uses the cloud.
 Local model caveats on an M2 Pro with 16 GB RAM:
 - Models of about 7-8B fit. `qwen3:14b` is likely to swap.
 - Ollama defaults to a small context window (often 2048-4096 tokens; check `ollama show <model>`). That truncates Aider's repo map and file contents. Raise it with `OLLAMA_CONTEXT_LENGTH` in the Ollama server environment or `num_ctx` in a Modelfile, which also raises RAM use.
@@ -268,7 +291,7 @@ The server, not the voice user, decides when a task needs a stronger coder. Set 
 CODER_LADDER=lmstudio:mlx-community/qwen2.5-coder-7b-instruct,openai:gpt-6-luna,openai:gpt-6.1-terra,openai:gpt-6.2-sol,openai:gpt-6.2-astra
 AUTO_ESCALATE=on          # on (default) | suggest | off
 MAX_PLAN_COST=1.00        # dollars per plan, default 1.00
-ESCALATE_LOCAL_ONLY=off   # on: local rungs only
+ESCALATE_LOCAL_ONLY=off   # on: this machine only; lan: this machine and model servers, never cloud
 ```
 
 - **Starting rung.** The coder from the ⚙ panel (else `.env`) is the starting rung. If it is in the ladder, only that rung and the ones above it are used. If it is not, it is added below the whole ladder. Every task starts on the starting rung again, not where the previous task ended.
@@ -276,7 +299,7 @@ ESCALATE_LOCAL_ONLY=off   # on: local rungs only
 - **What escalates.** Build or lint failure after the retry, coder timeout, "reflections allowed, stopping" (partial apply), no edit applied (model API error, SEARCH mismatch, edit-format error; this includes a local server that is down, logged as "the model server could not be reached"), and an `App.jsx` corruption. These do not escalate and fail the run as before: a non-zero Aider exit code, Aider missing, the opencode stub, a validator that could not run. When the last rung fails, the run fails with `Task N failed on all K rungs (...)`.
 - **`AUTO_ESCALATE`.** `on` escalates automatically. `suggest` stops the run at the failed task (reverted) and names the next rung; press Continue to run that task on it. `off`, or no `CODER_LADDER`, is the single-coder behavior of before: no ladder state, no cost cap.
 - **`MAX_PLAN_COST`.** The real cost Aider prints (`Cost: $X message`) is summed over every coder run of the plan. It is checked before each attempt on a cloud rung; when reached, the run stops and reports the spend and the task. Local attempts never count against it and are not blocked. A cloud attempt whose cost Aider did not print (timeout, crash) is estimated from the `Tokens: X sent, Y received` lines it printed, at the model's known price (a built-in table in `controller/escalation.py` for the GPT-6 models), or from a typical attempt of 8k in / 4k out when no counts were printed (about $0.003 on Luna, $0.03 on Terra, $0.18 on 6.2 Astra). A model with no known price is counted at a flat $0.10. The estimate is logged and the spend is shown with `~`. One attempt may overshoot the cap. The total is stored with the plan and survives Continue and a controller restart; to spend more, raise `MAX_PLAN_COST` in `.env` and restart the controller.
-- **`ESCALATE_LOCAL_ONLY=on`.** Keeps only local rungs (`ollama`/`lmstudio`, not an Ollama `:cloud` model). If the starting coder runs in the cloud, the run fails with a clear message instead of switching.
+- **`ESCALATE_LOCAL_ONLY`.** `on` keeps only rungs on this machine (`ollama`/`lmstudio`, not an Ollama `:cloud` model) and drops model-server rungs. `lan` keeps this machine and model-server rungs and drops cloud. If the starting coder is outside that scope, the run fails with a clear message instead of switching. Ladder entries can name a model server: `mini:<model>`.
 - **Bad configuration fails clearly.** An unknown provider, a malformed or duplicate entry, a cloud rung without `OPENAI_API_KEY`, or a non-loopback local server fails the run (and the Continue request) naming the entry. No rung is skipped and nothing falls back to another provider. Each rung's Aider process gets only that rung's credentials. The edit format follows the rung (`whole` local, `diff` cloud) unless `CODER_EDIT_FORMAT` is set.
 - **What you see.** Each task shows the rung that ran it in the task list (`↑` when it escalated), the task log lists lines like `gpt-6.1-terra, after qwen2.5-coder:7b failed lint: 'x' is not defined`, the running status shows spend against the cap, and the coder badge shows the model that actually ran last.
 
