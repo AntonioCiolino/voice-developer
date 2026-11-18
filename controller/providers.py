@@ -14,6 +14,9 @@ class PlannerConfigurationError(ValueError):
 # carry no :cloud suffix, e.g. a model created FROM a cloud model. Updated on each
 # discovery of the Ollama server.
 OLLAMA_REMOTE_MODELS: set[str] = set()
+# The same, per named Ollama server: (server name, model) pairs.
+SERVER_REMOTE_MODELS: set[tuple[str, str]] = set()
+LOCATION_LABELS = {"local": "This machine", "lan": "Local network", "cloud": "Cloud"}
 
 
 @dataclass(frozen=True)
@@ -23,18 +26,22 @@ class PlannerProvider:
     api_key: str | None = None
     ollama_api_base: str | None = None
     lmstudio_api_base: str | None = None
+    server: str | None = None  # friendly name of a configured model server (name is then its kind)
+    lan: bool = False          # the server is on the local network, not this machine
 
     @property
     def is_local(self) -> bool:
-        if self.name == "ollama" and (
-            self.model.lower().endswith((":cloud", "-cloud")) or self.model in OLLAMA_REMOTE_MODELS
-        ):
-            return False  # served through the local Ollama server but run in the cloud
+        remote = (self.server, self.model) in SERVER_REMOTE_MODELS if self.server else (
+            self.model in OLLAMA_REMOTE_MODELS)
+        if self.name == "ollama" and (self.model.lower().endswith((":cloud", "-cloud")) or remote):
+            return False  # served through an Ollama server but run in the cloud
         return self.name in LOCAL_PROVIDERS
 
     @property
     def location(self) -> str:
-        return "local" if self.is_local else "cloud"
+        if not self.is_local:
+            return "cloud"
+        return "lan" if self.lan else "local"
 
     @property
     def planner_base_url(self) -> str | None:
@@ -111,9 +118,18 @@ _VALID_PROVIDERS = {"openai", "ollama", "lmstudio"}
 
 def _provider_name(values, provider_var: str, default: str) -> str:
     name = values.get(provider_var, "").strip().lower() or default
-    if name not in _VALID_PROVIDERS:
+    if name in _VALID_PROVIDERS:
+        return name
+    from controller.model_servers import server_names  # lazy: model_servers imports this module
+    configured = server_names(values)
+    if not configured:
         raise PlannerConfigurationError(
             f"{provider_var} must be one of 'openai', 'ollama', or 'lmstudio'"
+        )
+    if name not in configured:
+        raise PlannerConfigurationError(
+            f"{provider_var} '{name}' is not a configured model server "
+            "(add it to MODEL_SERVERS, or use Reset to .env)"
         )
     return name
 
@@ -122,6 +138,15 @@ def _resolve_role(values, provider_var: str, model_var: str, default_provider: s
     """Resolve one role (planner or coder). A bad setting raises; it never falls back to another provider."""
     provider_name = _provider_name(values, provider_var, default_provider)
     role_model = values.get(model_var, "").strip()
+    if provider_name not in _VALID_PROVIDERS:
+        from controller.model_servers import resolve_server
+        if not role_model:
+            raise PlannerConfigurationError(f"{model_var} is required when {provider_var}={provider_name}")
+        try:
+            server = resolve_server(values, provider_name)
+        except PlannerConfigurationError as exc:
+            raise PlannerConfigurationError(f"{provider_var}={provider_name}: {exc}") from None
+        return _server_provider(server, role_model)
     if provider_name == "openai":
         api_key = values.get("OPENAI_API_KEY", "").strip()
         if not api_key:
@@ -153,6 +178,19 @@ def _resolve_role(values, provider_var: str, model_var: str, default_provider: s
     except PlannerConfigurationError as exc:
         raise PlannerConfigurationError(f"{provider_var}=ollama: {exc}") from None
     return PlannerProvider(name="ollama", model=model, ollama_api_base=api_base)
+
+
+def _server_provider(server, model: str) -> PlannerProvider:
+    base = {"lmstudio_api_base": server.base} if server.kind == "lmstudio" else {"ollama_api_base": server.base}
+    return PlannerProvider(name=server.kind, model=model, server=server.name, lan=server.lan, **base)
+
+
+def fresh_provider(provider: PlannerProvider) -> PlannerProvider:
+    """Re-resolve a named server's address (a .local name may have changed); other providers are returned as is."""
+    if not provider.server:
+        return provider
+    from controller.model_servers import resolve_server
+    return _server_provider(resolve_server(os.environ, provider.server), provider.model)
 
 
 def _values(env: dict[str, str] | None):
@@ -192,8 +230,29 @@ def create_planner_client(provider: PlannerProvider):
     return OpenAI(api_key=provider.api_key)
 
 
+_KIND_LABELS = {"ollama": "Ollama", "lmstudio": "LM Studio"}
+
+
+def _server_info(provider: PlannerProvider) -> dict[str, str]:
+    """Name, endpoint and location fields shared by the info dicts (never a URL for a named server)."""
+    return {
+        "name": provider.server or provider.name,
+        "kind": provider.name,
+        "server": provider.server,
+        "endpoint": provider.server if provider.server else provider.planner_base_url,
+        "location": provider.location,
+        "location_label": LOCATION_LABELS[provider.location],
+    }
+
+
 def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
     """Return safe provider evidence for UI and API responses."""
+    if provider.server:
+        kind = _KIND_LABELS[provider.name]
+        label = (f"{kind} on {provider.server} / local-only" if provider.location == "local"
+                 else f"{kind} on {provider.server} / local network" if provider.location == "lan"
+                 else f"{kind} cloud model (via {provider.server})")
+        return {**_server_info(provider), "label": label, "model": provider.model}
     if provider.name == "ollama":
         return {
             "name": "ollama",
@@ -220,7 +279,13 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
 
 
 def role_provider_info(role: str, provider: PlannerProvider) -> dict[str, str]:
-    """Safe per-role evidence (no keys)."""
+    """Safe per-role evidence (no keys, and no URL for a named server)."""
+    if provider.server:
+        kind = _KIND_LABELS[provider.name]
+        where = {"local": "local", "lan": "local network", "cloud": "cloud"}[provider.location]
+        label = (f"{kind} cloud model (via {provider.server})" if provider.location == "cloud"
+                 else f"{kind} on {provider.server} ({where})")
+        return {"role": role, **_server_info(provider), "label": label, "model": provider.model}
     if provider.name == "ollama":
         label = "Ollama (local)" if provider.is_local else "Ollama cloud model (via local server)"
         endpoint = provider.planner_base_url
@@ -232,12 +297,20 @@ def role_provider_info(role: str, provider: PlannerProvider) -> dict[str, str]:
             "model": provider.model, "endpoint": endpoint, "location": provider.location}
 
 
+def local_only_for(planner_location: str, coder_location: str) -> bool:
+    """True only when both roles run on this machine (not on the LAN, not in the cloud)."""
+    return planner_location == "local" and coder_location == "local"
+
+
 def roles_info(planner: PlannerProvider, coder: PlannerProvider) -> dict:
     return {
         "planner": role_provider_info("planner", planner),
         "coder": role_provider_info("coder", coder),
-        "local_only": planner.is_local and coder.is_local,
+        "local_only": local_only_for(planner.location, coder.location),
+        "uses_lan": "lan" in (planner.location, coder.location),
     }
+
+
 _OPENAI_OPTIONAL_ENV_VARS = frozenset({
     "OPENAI_API_BASE", "OPENAI_BASE_URL", "OPENAI_ORG_ID",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",

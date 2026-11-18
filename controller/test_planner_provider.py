@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from controller import selection
 from controller.providers import (
+    fresh_provider,
     PlannerConfigurationError,
     create_planner_client,
     planner_provider_info,
@@ -467,3 +468,99 @@ class LmStudioProviderTests(unittest.TestCase):
         self.assertTrue(roles_info(lm, lm)["local_only"])
         self.assertTrue(roles_info(ollama, lm)["local_only"])
         self.assertFalse(roles_info(cloud, lm)["local_only"])
+class ModelServerProviderTests(unittest.TestCase):
+    SERVERS = {
+        "ALLOW_LAN_MODEL_SERVERS": "on", "MODEL_SERVERS": "mini,here",
+        "MODEL_SERVER_MINI_KIND": "lmstudio", "MODEL_SERVER_MINI_URL": "http://192.168.1.20:1234",
+        "MODEL_SERVER_HERE_KIND": "ollama", "MODEL_SERVER_HERE_URL": "http://127.0.0.1:11435",
+        "OPENAI_API_KEY": "sk-secret",
+    }
+
+    def values(self, **extra):
+        return {**self.SERVERS, "PLANNER_PROVIDER": "mini", "PLANNER_MODEL": "qwen3-4b",
+                "CODER_PROVIDER": "mini", "CODER_MODEL": "qwen3-4b", **extra}
+
+    def test_server_role_resolves(self):
+        provider = resolve_coder_provider(self.values())
+        self.assertEqual((provider.name, provider.server, provider.lan, provider.location),
+                         ("lmstudio", "mini", True, "lan"))
+        self.assertTrue(provider.is_local)
+        self.assertEqual(provider.aider_model, "lm_studio/qwen3-4b")
+        self.assertEqual(provider.planner_base_url, "http://192.168.1.20:1234/v1")
+
+    def test_server_environment_is_isolated(self):
+        provider = resolve_coder_provider(self.values())
+        environment = provider_environment(provider, {**self.SERVERS, "PATH": "/bin", "OPENAI_API_KEY": "sk-secret"})
+        self.assertEqual(environment["LM_STUDIO_API_BASE"], "http://192.168.1.20:1234/v1")
+        self.assertEqual(environment["LM_STUDIO_API_KEY"], "lm-studio")
+        self.assertEqual(environment["PATH"], "/bin")
+        self.assertFalse([k for k in environment if k.startswith("OPENAI") or k.startswith("MODEL_SERVER")])
+
+    def test_ollama_kind_loopback_server(self):
+        provider = resolve_coder_provider(self.values(CODER_PROVIDER="here", CODER_MODEL="qwen2.5:7b",
+                                                      ALLOW_LAN_MODEL_SERVERS="off"))
+        self.assertEqual((provider.name, provider.location, provider.aider_model),
+                         ("ollama", "local", "ollama_chat/qwen2.5:7b"))
+        self.assertEqual(provider_environment(provider, {})["OLLAMA_API_BASE"], "http://127.0.0.1:11435")
+
+    def test_labels_and_no_url(self):
+        planner, coder = resolve_roles(self.values(CODER_PROVIDER="here", CODER_MODEL="m"))
+        info = roles_info(planner, coder)
+        self.assertEqual(info["planner"]["label"], "LM Studio on mini (local network)")
+        self.assertEqual(info["coder"]["label"], "Ollama on here (local)")
+        self.assertEqual((info["planner"]["name"], info["planner"]["endpoint"], info["planner"]["location_label"]),
+                         ("mini", "mini", "Local network"))
+        self.assertEqual((info["planner"]["kind"], info["planner"]["server"]), ("lmstudio", "mini"))
+        self.assertFalse(info["local_only"])
+        self.assertTrue(info["uses_lan"])
+        self.assertNotIn("192.168", repr(info) + repr(planner_provider_info(planner)))
+
+    def test_loopback_servers_are_local_only(self):
+        here = resolve_roles(self.values(PLANNER_PROVIDER="here", CODER_PROVIDER="here", CODER_MODEL="m",
+                                         PLANNER_MODEL="m"))
+        info = roles_info(*here)
+        self.assertTrue(info["local_only"])
+        self.assertFalse(info["uses_lan"])
+
+    def test_model_required(self):
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            resolve_coder_provider(self.values(CODER_MODEL=""))
+        self.assertIn("CODER_MODEL", str(raised.exception))
+
+    def test_removed_server_raises_without_fallback(self):
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            resolve_coder_provider(self.values(MODEL_SERVERS="here"))
+        self.assertIn("'mini' is not a configured model server", str(raised.exception))
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            resolve_coder_provider(self.values(ALLOW_LAN_MODEL_SERVERS="off"))
+        self.assertIn("ALLOW_LAN_MODEL_SERVERS", str(raised.exception))
+
+    def test_unchanged_message_without_servers(self):
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            resolve_planner_provider({"PLANNER_PROVIDER": "mini", "PLANNER_MODEL": "m"})
+        self.assertIn("must be one of 'openai', 'ollama', or 'lmstudio'", str(raised.exception))
+
+    def test_fresh_provider_re_resolves(self):
+        values = self.values(MODEL_SERVER_MINI_URL="http://r2m2-mini.local:1234")
+        answer = lambda ip: (lambda host, port, family=0: [(family, 1, 6, "", (ip, port or 0))])
+        with patch("controller.model_servers.socket.getaddrinfo", answer("192.168.1.9")):
+            provider = resolve_coder_provider(values)
+        self.assertEqual(provider.lmstudio_api_base, "http://192.168.1.9:1234")
+        with patch.dict(os.environ, values), patch("controller.model_servers.socket.getaddrinfo", answer("192.168.1.10")):
+            self.assertEqual(fresh_provider(provider).lmstudio_api_base, "http://192.168.1.10:1234")
+        with patch.dict(os.environ, values), patch("controller.model_servers.socket.getaddrinfo", answer("8.8.8.8")):
+            with self.assertRaises(PlannerConfigurationError):
+                fresh_provider(provider)
+        plain = resolve_planner_provider({"PLANNER_PROVIDER": "lmstudio", "PLANNER_MODEL": "m"})
+        self.assertIs(fresh_provider(plain), plain)
+
+    def test_server_ollama_remote_model_is_cloud(self):
+        from controller.providers import SERVER_REMOTE_MODELS
+        provider = resolve_coder_provider(self.values(CODER_PROVIDER="here", CODER_MODEL="stub"))
+        SERVER_REMOTE_MODELS.add(("here", "stub"))
+        try:
+            self.assertEqual(provider.location, "cloud")
+        finally:
+            SERVER_REMOTE_MODELS.discard(("here", "stub"))
+        cloud = resolve_coder_provider(self.values(CODER_PROVIDER="here", CODER_MODEL="gpt-oss:120b-cloud"))
+        self.assertEqual(cloud.location, "cloud")

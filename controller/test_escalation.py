@@ -79,6 +79,72 @@ class ResolveTests(unittest.TestCase):
             resolve_escalation(TERRA, env(ESCALATE_LOCAL_ONLY="on"))
 
 
+SERVER_ENV = {"ALLOW_LAN_MODEL_SERVERS": "on", "MODEL_SERVERS": "mini",
+              "MODEL_SERVER_MINI_KIND": "lmstudio", "MODEL_SERVER_MINI_URL": "http://192.168.1.20:1234"}
+MINI = PlannerProvider("lmstudio", "qwen3-4b", lmstudio_api_base="http://192.168.1.20:1234", server="mini", lan=True)
+
+
+class ServerLadderTests(unittest.TestCase):
+    LADDER = "lmstudio:a,mini:qwen3:8b,openai:gpt-6.1-terra"
+
+    def esc(self, start=LOCAL, **extra):
+        return resolve_escalation(start, {**BASE, **SERVER_ENV, "CODER_LADDER": self.LADDER, **extra})
+
+    def test_ladder_with_server_entries(self):
+        esc = self.esc()
+        self.assertEqual([r.spec for r in esc.rungs],
+                         ["ollama:qwen2.5-coder:7b", "lmstudio:a", "mini:qwen3:8b", "openai:gpt-6.1-terra"])
+        rung = esc.rungs[2]
+        self.assertEqual((rung.label, rung.provider.model, rung.provider.server), ("qwen3:8b@mini", "qwen3:8b", "mini"))
+        info = rung.info()
+        self.assertEqual((info["provider"], info["server"], info["location"]), ("mini", "mini", "lan"))
+        self.assertNotIn("192.168", repr(esc.info()))
+        self.assertEqual(esc.scope, "off")
+
+    def test_duplicate_per_server(self):
+        with self.assertRaises(PlannerConfigurationError):
+            self.esc(CODER_LADDER="mini:a,mini:a")
+        self.assertEqual(len(self.esc(CODER_LADDER="mini:a,lmstudio:a").rungs), 3)
+
+    def test_unknown_server_names_the_entry(self):
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            self.esc(CODER_LADDER="studio:a")
+        self.assertIn("CODER_LADDER entry 'studio:a'", str(raised.exception))
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            resolve_escalation(LOCAL, {**BASE, "CODER_LADDER": "mini:a"})
+        self.assertIn("provider must be one of 'openai', 'ollama', or 'lmstudio'", str(raised.exception))
+        self.assertNotIn("model server", str(raised.exception))
+
+    def test_server_start_rung_found_in_ladder(self):
+        self.assertEqual([r.label for r in self.esc(MINI.__class__("lmstudio", "qwen3:8b", lmstudio_api_base="http://192.168.1.20:1234", server="mini", lan=True)).rungs],
+                         ["qwen3:8b@mini", "gpt-6.1-terra"])
+
+    def test_on_drops_lan_and_cloud(self):
+        esc = self.esc(ESCALATE_LOCAL_ONLY="on")
+        self.assertEqual([r.spec for r in esc.rungs], ["ollama:qwen2.5-coder:7b", "lmstudio:a"])
+        self.assertEqual((esc.local_only, esc.scope), (True, "machine"))
+
+    def test_lan_keeps_lan_drops_cloud(self):
+        esc = self.esc(ESCALATE_LOCAL_ONLY="lan")
+        self.assertEqual([r.spec for r in esc.rungs], ["ollama:qwen2.5-coder:7b", "lmstudio:a", "mini:qwen3:8b"])
+        self.assertEqual((esc.local_only, esc.scope), (True, "lan"))
+        self.assertEqual(esc.info()["scope"], "lan")
+
+    def test_lan_start_under_on_raises(self):
+        with self.assertRaises(PlannerConfigurationError) as raised:
+            self.esc(MINI, ESCALATE_LOCAL_ONLY="on")
+        self.assertEqual(str(raised.exception), "ESCALATE_LOCAL_ONLY=on but the selected coder qwen3-4b@mini runs on "
+                         "the local network (use ESCALATE_LOCAL_ONLY=lan to allow it)")
+        self.assertTrue(self.esc(MINI, ESCALATE_LOCAL_ONLY="lan").local_only)
+
+    def test_cloud_start_message_unchanged(self):
+        for setting in ("on", "lan"):
+            with self.assertRaises(PlannerConfigurationError) as raised:
+                self.esc(TERRA, ESCALATE_LOCAL_ONLY=setting)
+            self.assertEqual(str(raised.exception),
+                             "ESCALATE_LOCAL_ONLY=on but the selected coder gpt-6.1-terra runs in the cloud")
+
+
 class LadderRunTests(tpf.TempAppCase):
     E = [tpf.APP_JSX + f"// edit {k}\n" for k in range(8)]
     COST = "Cost: $0.05 message, $0.05 session."

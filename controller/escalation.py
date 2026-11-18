@@ -12,6 +12,7 @@ from controller.providers import (
     PlannerProvider,
     _resolve_role,
 )
+from controller.model_servers import server_names
 
 # Counted for a cloud attempt whose cost Aider did not print AND whose model has no known
 # price, so unseen spend cannot grow without bound under the cost cap.
@@ -66,7 +67,8 @@ class Rung:
     label: str  # last "/" segment of the model id
 
     def info(self) -> dict:
-        return {"label": self.label, "provider": self.provider.name,
+        return {"label": self.label, "provider": self.provider.server or self.provider.name,
+                "server": self.provider.server,
                 "model": self.provider.model, "location": self.provider.location}
 
 
@@ -77,16 +79,19 @@ class Escalation:
     rungs: tuple
     max_plan_cost: float
     local_only: bool
+    scope: str = "off"  # ESCALATE_LOCAL_ONLY: "off", "machine" (on) or "lan"
 
     def info(self) -> dict:
         return {"mode": self.mode, "max_plan_cost": self.max_plan_cost,
-                "local_only": self.local_only,
+                "local_only": self.local_only, "scope": self.scope,
                 "rungs": [r.info() for r in self.rungs], "start": 0}
 
 
 def rung_for_provider(provider: PlannerProvider) -> Rung:
-    return Rung(provider, f"{provider.name}:{provider.model}",
-                provider.model.rsplit("/", 1)[-1] or provider.model)
+    short = provider.model.rsplit("/", 1)[-1] or provider.model
+    if provider.server:
+        return Rung(provider, f"{provider.server}:{provider.model}", f"{short}@{provider.server}")
+    return Rung(provider, f"{provider.name}:{provider.model}", short)
 
 
 def _choice(values, name: str, default: str, allowed) -> str:
@@ -99,6 +104,7 @@ def _choice(values, name: str, default: str, allowed) -> str:
 def _parse_ladder(raw: str, values) -> list[Rung]:
     rungs: list[Rung] = []
     seen: set[str] = set()
+    servers = server_names(values)
     for entry in raw.split(","):
         entry = entry.strip()
         prefix = f"CODER_LADDER entry '{entry}': "
@@ -108,8 +114,10 @@ def _parse_ladder(raw: str, values) -> list[Rung]:
         name, model = name.strip().lower(), model.strip()
         if not sep or not model:
             raise PlannerConfigurationError(prefix + "expected provider:model")
-        if name not in _PROVIDERS:
-            raise PlannerConfigurationError(prefix + "provider must be one of 'openai', 'ollama', or 'lmstudio'")
+        if name not in _PROVIDERS and name not in servers:
+            raise PlannerConfigurationError(
+                prefix + "provider must be one of 'openai', 'ollama', or 'lmstudio'"
+                + (" or a configured model server" if servers else ""))
         spec = f"{name}:{model}"
         if spec in seen:
             raise PlannerConfigurationError(prefix + "duplicate entry")
@@ -143,16 +151,25 @@ def resolve_escalation(start: PlannerProvider, env=None) -> Escalation:
         cap = 0.0
     if not cap > 0 or cap != cap or cap == float("inf"):
         raise PlannerConfigurationError("MAX_PLAN_COST must be a positive number of dollars")
-    local_only = _choice(values, "ESCALATE_LOCAL_ONLY", "off", ("on", "off")) == "on"
+    setting = _choice(values, "ESCALATE_LOCAL_ONLY", "off", ("on", "off", "lan"))
+    scope = {"off": "off", "on": "machine", "lan": "lan"}[setting]
+    local_only = scope != "off"
     ladder = _parse_ladder(raw, values)
     if local_only:
-        if not start.is_local:
+        if start.location == "cloud":
             raise PlannerConfigurationError(
                 f"ESCALATE_LOCAL_ONLY=on but the selected coder {only.label} runs in the cloud")
-        ladder = [r for r in ladder if r.provider.is_local]
+        if scope == "machine":
+            if start.location == "lan":
+                raise PlannerConfigurationError(
+                    f"ESCALATE_LOCAL_ONLY=on but the selected coder {only.label} runs on the local "
+                    "network (use ESCALATE_LOCAL_ONLY=lan to allow it)")
+            ladder = [r for r in ladder if r.provider.location == "local"]
+        else:
+            ladder = [r for r in ladder if r.provider.location != "cloud"]
     specs = [r.spec for r in ladder]
     if only.spec in specs:
         rungs = ladder[specs.index(only.spec):]
     else:
         rungs = [only, *ladder]
-    return Escalation(True, mode, tuple(rungs), cap, local_only)
+    return Escalation(True, mode, tuple(rungs), cap, local_only, scope)
