@@ -385,20 +385,29 @@
       document.getElementById('closeBtn').textContent = 'Close (cancels auto-start)';
       setProcessing('Plan ready. Starting soon...');
       show();
-      countdownTimer = setInterval(() => {
+      // Only one countdown at a time, and each clears its own timer: a second countdown used to
+      // overwrite countdownTimer, leaving the first one calling /execute every second forever.
+      if (countdownTimer) clearInterval(countdownTimer);
+      const timer = setInterval(() => {
+        if (countdownTimer !== timer) { clearInterval(timer); return; }
         left -= 1;
         if (left > 0) { show(); return; }
-        clearInterval(countdownTimer);
+        clearInterval(timer);
         countdownTimer = null;
         btn.textContent = 'Plan';
         executePlan(jobId);
       }, 1000);
+      countdownTimer = timer;
     }
 
+    let planInFlight = false;
     async function plan() {
       if (cancelCountdown('Auto-start cancelled. Press Continue plan to run this plan.')) return;
+      if (planInFlight) return;  // a second tap or voice submit while the planner is still working
       const prompt = document.getElementById('prompt').value.trim();
       if (!prompt) return;
+      planInFlight = true;
+      document.getElementById('planBtn').disabled = true;
       setProcessing('Planning...');
       const status = document.getElementById('status');
       status.textContent = 'Planning...';
@@ -433,6 +442,9 @@
         status.textContent = 'Network error';
         status.className = 'err';
         clearProcessing();
+      } finally {
+        planInFlight = false;
+        document.getElementById('planBtn').disabled = false;  // re-enabled so it can cancel the countdown
       }
     }
 
