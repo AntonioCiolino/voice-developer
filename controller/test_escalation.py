@@ -282,6 +282,60 @@ class LadderRunTests(tpf.TempAppCase):
         self.assertEqual((job["status"], len(fake.calls)), ("failed", 0))
         self.assertIn("ESCALATE_LOCAL_ONLY=on", job["error"])
 
+    SERVER_LADDER = "ollama:qwen2.5-coder:7b,mini:qwen3:8b,openai:gpt-6.1-terra"
+
+    def server_env(self, **extra):
+        return {**BASE, **SERVER_ENV, "CODER_LADDER": self.SERVER_LADDER, **extra}
+
+    def test_server_rung_runs_with_only_its_server(self):
+        probed = []
+        with patch("controller.worker.probe_server", lambda p: probed.append(p.server) or True):
+            job, fake = self.run_with([{"stdout": "APIConnectionError"}, self.ok(0)], tasks=("t1",),
+                                      job_env=self.server_env())
+        self.assertEqual((job["status"], probed), ("done", ["mini"]))
+        command, kwargs = fake.calls[1]
+        self.assertEqual(command[command.index("--model") + 1], "lm_studio/qwen3:8b")
+        self.assertEqual(command[command.index("--edit-format") + 1], "whole")
+        run_env = kwargs["env"]
+        self.assertEqual(run_env["LM_STUDIO_API_BASE"], "http://192.168.1.20:1234/v1")
+        self.assertFalse([k for k in run_env if k.startswith(("OPENAI", "ANTHROPIC"))])
+        self.assertNotIn("OLLAMA_API_BASE", run_env)
+        self.assertEqual((job["roles"]["local_only"], job["roles"]["uses_lan"]), (False, True))
+        self.assertEqual(job["roles"]["coder"]["location"], "lan")
+        self.assertNotIn("192.168", json.dumps(job["roles"]) + json.dumps(job["task_rungs"]))
+
+    def test_unreachable_server_rung_escalates_without_launching_aider(self):
+        with patch("controller.worker.probe_server", lambda p: False):
+            job, fake = self.run_with([{"stdout": "APIConnectionError"}, self.ok(0)], tasks=("t1",),
+                                      job_env=self.server_env())
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(self.models(fake), ["ollama_chat/qwen2.5-coder:7b", "gpt-6.1-terra"])
+        self.assertIn("model server mini is not reachable", job["task_rungs"][0]["history"][1])
+        self.assertNotIn("192.168", json.dumps(job["task_rungs"]))
+
+    def test_single_coder_unreachable_server_fails_clearly(self):
+        job_env = {**BASE, **SERVER_ENV, "CODER_PROVIDER": "mini", "CODER_MODEL": "qwen3:8b"}
+        with patch("controller.worker.probe_server", lambda p: False):
+            job, fake = self.run_with([], tasks=("t1",), job_env=job_env)
+        self.assertEqual((job["status"], len(fake.calls)), ("failed", 0))
+        self.assertIn("model server mini is not reachable", job["error"])
+        self.assertNotIn("192.168", job["error"])
+
+    def test_local_name_that_now_resolves_publicly_fails_and_escalates(self):
+        def lookup(host, port, family):
+            public = bool(getattr(subprocess.run, "calls", []))  # true once the first rung has run
+            return [(2, 1, 6, "", ("8.8.8.8" if public else "192.168.1.20", port))]
+        job_env = self.server_env(MODEL_SERVER_MINI_URL="http://r2m2-mini.local:1234")
+        with patch("controller.model_servers.socket.getaddrinfo", lookup), \
+                patch("controller.worker.probe_server", lambda p: True):
+            job, fake = self.run_with([{"stdout": "APIConnectionError"}, self.ok(0)], tasks=("t1",), job_env=job_env)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(self.models(fake), ["ollama_chat/qwen2.5-coder:7b", "gpt-6.1-terra"])
+        history = job["task_rungs"][0]["history"][1]
+        self.assertIn("private network", history)
+        for secret in ("8.8.8.8", "192.168", "r2m2-mini"):
+            self.assertNotIn(secret, history)
+
     def test_off_and_unset_ladder_are_single_coder(self):
         bad = {"stdout": "APIConnectionError"}
         for extra, job_env in (({"AUTO_ESCALATE": "off", "MAX_PLAN_COST": "0.0001"}, None),

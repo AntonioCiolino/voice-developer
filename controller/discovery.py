@@ -2,7 +2,12 @@ import os
 
 import httpx
 
-from controller.providers import OLLAMA_REMOTE_MODELS, PlannerConfigurationError, _normalize_ollama_api_base
+from controller.providers import (
+    OLLAMA_REMOTE_MODELS,
+    SERVER_REMOTE_MODELS,
+    PlannerConfigurationError,
+    _normalize_ollama_api_base,
+)
 
 TIMEOUT_SECONDS = 2
 # Real model weights are at least tens of megabytes; cloud stubs are under 1 KB.
@@ -11,19 +16,21 @@ LOCAL_WEIGHTS_MIN_BYTES = 1_000_000
 _LABELS = {"lmstudio": "LM Studio", "ollama": "Ollama", "openai": "OpenAI"}
 
 
-def _entry(name: str, models=None, error: str | None = None) -> dict:
+def _entry(name: str, models=None, error: str | None = None, kind: str | None = None,
+           label: str | None = None, location: str | None = None) -> dict:
     return {
         "name": name,
-        "label": _LABELS[name],
-        "location": "cloud" if name == "openai" else "local",
+        "kind": kind or name,
+        "label": label or _LABELS[name],
+        "location": location or ("cloud" if name == "openai" else "local"),
         "available": error is None,
         "error": error,
         "models": models or [],
     }
 
 
-def _model(model_id: str, cloud: bool) -> dict:
-    return {"id": model_id, "label": model_id, "location": "cloud" if cloud else "local"}
+def _model(model_id: str, cloud: bool, where: str = "local") -> dict:
+    return {"id": model_id, "label": model_id, "location": "cloud" if cloud else where}
 
 
 def _ollama_runs_remotely(entry: dict) -> bool:
@@ -85,10 +92,57 @@ def _discover_openai() -> dict:
     return _entry("openai", models=[_model(i, True) for i in ids])
 
 
+_MODELS_PATHS = {"lmstudio": "/v1/models", "ollama": "/api/tags"}
+
+
+def _discover_server(name: str) -> dict:
+    """One configured model server, queried live. Errors are short and never carry the URL."""
+    from controller.model_servers import resolve_server  # lazy: model_servers imports providers
+    try:
+        server = resolve_server(os.environ, name)
+    except PlannerConfigurationError as exc:
+        return _entry(name, error=str(exc), kind="lmstudio", label=name)
+    label = f"{_LABELS[server.kind]} on {name}"
+    where = "lan" if server.lan else "local"
+    try:
+        data = _get_json(f"{server.base}{_MODELS_PATHS[server.kind]}")
+        if server.kind == "lmstudio":
+            ids = [m["id"] for m in data["data"] if isinstance(m.get("id"), str) and "embed" not in m["id"].lower()]
+            models = [_model(i, False, where) for i in ids]
+        else:
+            entries = [m for m in data["models"] if isinstance(m.get("name"), str)]
+            models = [_model(m["name"], _ollama_runs_remotely(m), where) for m in entries]
+            SERVER_REMOTE_MODELS.difference_update({k for k in SERVER_REMOTE_MODELS if k[0] == name})
+            SERVER_REMOTE_MODELS.update((name, m["id"]) for m in models if m["location"] == "cloud")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+        return _entry(name, error=f"{name} is not reachable", kind=server.kind, label=label, location=where)
+    return _entry(name, models=models, kind=server.kind, label=label, location=where)
+
+
+def probe_server(provider) -> bool:
+    """One short GET of the server's models list. True when it answers; never raises, never reports the URL."""
+    base = provider.lmstudio_api_base if provider.name == "lmstudio" else provider.ollama_api_base
+    try:
+        _get_json(f"{base}{_MODELS_PATHS[provider.name]}")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+    return True
+
+
+def _discover_servers() -> list[dict]:
+    from controller.model_servers import server_names
+    try:
+        names = server_names(os.environ)
+    except PlannerConfigurationError as exc:
+        return [_entry("model-servers", error=str(exc), kind="lmstudio", label="Model servers")]
+    return [_discover_server(name) for name in names]
+
+
 def discover_providers() -> list[dict]:
     """Fresh model lists per provider. Local servers are queried live; OpenAI comes from .env."""
     return [
         _discover_local("lmstudio", "LMSTUDIO_API_BASE", "http://127.0.0.1:1234", "/v1/models"),
         _discover_local("ollama", "OLLAMA_API_BASE", "http://127.0.0.1:11434", "/api/tags"),
         _discover_openai(),
+        *_discover_servers(),
     ]

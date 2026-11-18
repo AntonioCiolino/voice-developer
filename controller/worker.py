@@ -16,10 +16,13 @@ from controller.coder import (
     resolve_task_validation,
     resolve_validation_timeout,
 )
+from controller.discovery import probe_server
 from controller.escalation import estimate_cloud_cost, resolve_escalation
 from controller.planning import parse_task_files
 from controller.providers import (
     PlannerConfigurationError,
+    fresh_provider,
+    local_only_for,
     provider_environment,
     resolve_roles,
     role_provider_info,
@@ -228,8 +231,9 @@ def _record_coder(job: dict, planner, coder) -> None:
         return
     roles['coder'] = role_provider_info('coder', coder)
     planned = roles['planner']
-    planner_local = planned.get('location') == 'local' if 'location' in planned else planner.is_local
-    roles['local_only'] = planner_local and coder.is_local
+    planner_location = planned.get('location') or planner.location
+    roles['local_only'] = local_only_for(planner_location, coder.location)
+    roles['uses_lan'] = "lan" in (planner_location, coder.location)
 
 
 @dataclass
@@ -314,8 +318,17 @@ async def _run_rung_attempt(job_id: str, i: int, rung, ctx: RunContext, box: dic
                 ]
             prompt = build_task_prompt(job, i, edit_format, ctx.max_lines, files, validation_errors,
                                        previous_failure)
+            if provider.server or provider.lan:
+                # Re-resolve the address (a .local name may have moved), then fail fast if it is down.
+                provider = fresh_provider(provider)
+                if not await asyncio.to_thread(probe_server, provider):
+                    message = f"model server {provider.server} is not reachable"
+                    return TaskFailure("unreachable", message, f"The {message}.", message, True)
             command = build_coder_command(ctx.engine, provider, prompt, files, edit_format)
             result = await run_coder_streaming(job_id, i, command, provider, ctx.timeout, prefix)
+        except PlannerConfigurationError as exc:
+            message = f"model server {provider.server} is not usable: {exc}"
+            return TaskFailure("unreachable", message, message, message, True)
         except CoderEngineNotImplemented as exc:
             return TaskFailure("engine", "engine not implemented", str(exc), str(exc), False)
         except subprocess.TimeoutExpired as exc:

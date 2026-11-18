@@ -286,6 +286,113 @@ class RunJobCoderTests(ModelConfigCase):
         self.assertFalse(jobs[job_b]["roles"]["local_only"])
 
 
+SERVERS = {
+    "ALLOW_LAN_MODEL_SERVERS": "on", "MODEL_SERVERS": "mini,studio",
+    "MODEL_SERVER_MINI_KIND": "lmstudio", "MODEL_SERVER_MINI_URL": "http://192.168.1.20:1234",
+    "MODEL_SERVER_STUDIO_KIND": "lmstudio", "MODEL_SERVER_STUDIO_URL": "http://192.168.1.30:8000",
+}
+SERVER_MODELS = {"192.168.1.20": ["qwen-b", "mini-only"], "192.168.1.30": ["qwen-b"], "192.168.1.40": ["dock-model"]}
+
+
+def server_get(down=()):
+    def get(url, **kwargs):
+        host = url.split("//")[1].split(":")[0]
+        if host in down:
+            raise httpx.ConnectError("refused")
+        if host not in SERVER_MODELS:
+            return fake_get()(url, **kwargs)
+        body = {"data": [{"id": m} for m in SERVER_MODELS[host]]}
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: body)
+    return get
+
+
+class ModelServerTests(unittest.TestCase):
+    setUp = ModelConfigCase.setUp
+    raises = ModelConfigCase.raises
+
+    def use(self, down=(), **env):
+        for p in (patch.dict(os.environ, {**SERVERS, **env}), patch.object(discovery.httpx, "get", server_get(down))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_same_model_on_two_servers_stays_separate(self):
+        self.use()
+        found = {p["name"]: p for p in discover_providers()}
+        self.assertEqual(list(found), ["lmstudio", "ollama", "openai", "mini", "studio"])
+        for name in ("lmstudio", "mini", "studio"):
+            self.assertIn("qwen-b", [m["id"] for m in found[name]["models"]])
+        self.assertEqual([m["id"] for m in found["mini"]["models"]], ["qwen-b", "mini-only"])
+        self.assertEqual((found["mini"]["kind"], found["mini"]["location"], found["mini"]["label"]),
+                         ("lmstudio", "lan", "LM Studio on mini"))
+        self.assertEqual(found["mini"]["models"][0]["location"], "lan")
+        self.assertEqual(found["lmstudio"]["location"], "local")
+
+    def test_one_server_down_leaves_the_others(self):
+        self.use(down=("192.168.1.30",))
+        found = {p["name"]: p for p in discover_providers()}
+        self.assertEqual((found["studio"]["available"], found["studio"]["error"]), (False, "studio is not reachable"))
+        self.assertTrue(found["mini"]["available"] and found["lmstudio"]["available"])
+        self.assertEqual(len(found["mini"]["models"]), 2)
+
+    def test_put_persists_server_and_model_without_url(self):
+        self.use()
+        payload = put_model_config(req(coder=("mini", "qwen-b")))
+        saved = self.path.read_text()
+        self.assertEqual(json.loads(saved), {"coder": {"provider": "mini", "model": "qwen-b"}})
+        self.assertNotIn("192.168", saved)
+        coder = payload["roles"]["coder"]
+        self.assertEqual((coder["provider"], coder["model"], coder["location"], coder["server"], coder["source"]),
+                         ("mini", "qwen-b", "lan", "mini", "ui"))
+        self.assertEqual(coder["location_label"], "Local network")
+        self.assertEqual(payload["roles"]["planner"]["location"], "local")
+        self.assertEqual((payload["local_only"], payload["uses_lan"]), (False, True))
+        self.assertEqual(get_model_config()["roles"]["coder"], coder)
+        text = json.dumps(payload)
+        self.assertNotIn("192.168", text)
+        self.assertNotIn("http://", text)
+
+    def test_unknown_server_is_400_and_down_server_is_503(self):
+        self.use(down=("192.168.1.30",))
+        self.raises(400, req(coder=("attic", "qwen-b")))
+        self.raises(400, req(coder=("mini", "nope")))
+        with self.assertRaises(HTTPException) as ctx:
+            put_model_config(req(coder=("studio", "qwen-b")))
+        self.assertEqual((ctx.exception.status_code, ctx.exception.detail), (503, "LM Studio on studio: studio is not reachable"))
+
+    def test_removed_server_is_a_config_error_and_reset_recovers(self):
+        self.use()
+        put_model_config(req(coder=("mini", "qwen-b")))
+        patch.dict(os.environ, {"MODEL_SERVERS": "studio"}).start()
+        self.addCleanup(patch.stopall)
+        payload = get_model_config()
+        self.assertIsNone(payload["roles"])
+        self.assertIn("mini", payload["config_error"])
+        self.assertNotIn("192.168", json.dumps(payload))
+        self.assertTrue(self.path.exists())
+        recovered = delete_model_config()
+        self.assertIsNone(recovered["config_error"])
+        self.assertEqual(recovered["roles"]["coder"]["provider"], "ollama")
+
+    def test_local_host_name_is_resolved_and_never_shown(self):
+        env = {"MODEL_SERVERS": "dock", "MODEL_SERVER_DOCK_KIND": "lmstudio",
+               "MODEL_SERVER_DOCK_URL": "http://r2m2-dock.local:1234"}
+        self.use(**env)
+        answer = [(2, 1, 6, "", ("192.168.1.40", 1234))]
+        with patch("controller.model_servers.socket.getaddrinfo", return_value=answer):
+            payload = put_model_config(req(coder=("dock", "dock-model")))
+        self.assertEqual(payload["roles"]["coder"]["location"], "lan")
+        text = json.dumps(payload) + self.path.read_text()
+        for secret in ("192.168", "r2m2-dock", "http://"):
+            self.assertNotIn(secret, text)
+
+    def test_malformed_server_list_is_one_unavailable_entry(self):
+        self.use(MODEL_SERVERS="mini,mini")
+        found = discover_providers()
+        self.assertEqual([p["name"] for p in found], ["lmstudio", "ollama", "openai", "model-servers"])
+        self.assertFalse(found[-1]["available"])
+        self.assertIn("MODEL_SERVERS", found[-1]["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

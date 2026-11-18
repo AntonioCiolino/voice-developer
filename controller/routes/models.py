@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from controller import selection
 from controller.discovery import discover_providers
-from controller.providers import PlannerConfigurationError, resolve_roles, roles_info
+from controller.providers import LOCATION_LABELS, PlannerConfigurationError, resolve_roles, roles_info
 from controller.routes.jobs import _busy
 from controller.schemas import ModelConfigRequest
 
@@ -14,7 +14,7 @@ MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 
 
 def _payload() -> dict:
-    roles, local_only, error = None, None, None
+    roles, local_only, uses_lan, error = None, None, None, None
     try:
         saved = selection.load_selection() or {}
         planner, coder = resolve_roles()
@@ -24,16 +24,20 @@ def _payload() -> dict:
                 "provider": info[role]["name"],
                 "model": info[role]["model"],
                 "location": info[role]["location"],
+                "location_label": LOCATION_LABELS[info[role]["location"]],
+                "server": info[role].get("server"),
                 "source": "ui" if role in saved else "env",
             }
             for role in selection.ROLES
         }
         local_only = info["local_only"]
+        uses_lan = info["uses_lan"]
     except PlannerConfigurationError as exc:
         error = str(exc)
     return {
         "roles": roles,
         "local_only": local_only,
+        "uses_lan": uses_lan,
         "providers": discover_providers(),
         "busy": _busy(),
         "config_error": error,
