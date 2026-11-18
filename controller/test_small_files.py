@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import controller.test_plan_flow as tpf
@@ -202,6 +203,66 @@ class RunScopeTests(tpf.TempAppCase):
         self.assertIn("src/App.jsx", second)
         self.assertIn("index.html", second)
         self.assertEqual(state.jobs[tpf.JOB_A]["task_statuses"], ["done", "done"])
+
+
+class MisplacedWriteTests(tpf.TempAppCase):
+    """A coder that writes outside src/ or leaves a named file empty fails the task (and escalates)."""
+
+    def aider(self, stdout, write):
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            (self.src / "New.jsx").touch()  # Aider creates a named missing file as an empty one
+            write()
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        run.calls = calls
+        return run
+
+    def test_write_into_a_doubled_folder_fails_and_reverts(self):
+        doubled = self.app / "generated-app" / "src" / "New.jsx"
+
+        def write():
+            doubled.parent.mkdir(parents=True, exist_ok=True)
+            doubled.write_text("export default function New() { return null; }\n")
+        self.make_job(tpf.JOB_A, ["add New [files: src/New.jsx]"])
+        with patch.object(subprocess, "run", self.aider("Applied edit to generated-app/src/New.jsx\n", write)):
+            asyncio.run(run_job(tpf.JOB_A))
+        job = state.jobs[tpf.JOB_A]
+        self.assertEqual(job["task_statuses"], ["failed"])
+        self.assertIn("outside the app's src/ folder (generated-app/src/New.jsx)", job["error"])
+        self.assertFalse((self.src / "New.jsx").exists())  # the empty placeholder is reverted
+        self.assertTrue(doubled.exists())                  # misplaced work is left for the user
+
+    def test_named_file_left_empty_fails(self):
+        def write():
+            (self.src / "App.jsx").write_text(tpf.APP_JSX.replace("hello", "green"))
+        self.make_job(tpf.JOB_A, ["add New [files: src/New.jsx, src/App.jsx]"])
+        with patch.object(subprocess, "run", self.aider("Applied edit to src/App.jsx\n", write)):
+            asyncio.run(run_job(tpf.JOB_A))
+        job = state.jobs[tpf.JOB_A]
+        self.assertEqual(job["task_statuses"], ["failed"])
+        self.assertIn("left files it was meant to write empty (src/New.jsx)", job["error"])
+        self.assertFalse((self.src / "New.jsx").exists())
+        self.assertNotIn("green", (self.src / "App.jsx").read_text())
+
+    def test_stray_paths(self):
+        from controller.worker import stray_edit_paths
+        out = ("Applied edit to src/App.jsx\nApplied edit to index.html\nApplied edit to package.json\n"
+               "Applied edit to generated-app/src/a.js\nApplied edit to ../outside.js\n"
+               "Applied edit to notes.txt\nApplied edit to src/../x.js\n")
+        self.assertEqual(stray_edit_paths(out, None),
+                         ["generated-app/src/a.js", "../outside.js", "notes.txt", "src/../x.js"])
+        self.assertEqual(stray_edit_paths("Applied edit to src/a.js\n", ""), [])
+
+    def test_file_that_was_already_empty_is_not_flagged(self):
+        from controller.workspace import snapshot_task_scope
+        from controller.worker import empty_named_files
+        (self.src / "Blank.jsx").write_text("")
+        snap = snapshot_task_scope()
+        self.assertEqual(empty_named_files(snap, ["src/Blank.jsx", "src/Missing.jsx"]), [])
+        (self.src / "Missing.jsx").touch()
+        self.assertEqual(empty_named_files(snap, ["src/Blank.jsx", "src/Missing.jsx"]), ["src/Missing.jsx"])
 
 
 if __name__ == "__main__":

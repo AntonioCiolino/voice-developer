@@ -1,4 +1,5 @@
 import asyncio
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -129,6 +130,45 @@ def edit_failure_reason(stdout, stderr) -> str:
     """Return why Aider applied no edit, or "" when its output shows no failure."""
     output = text_of(stdout) + "\n" + text_of(stderr)
     return next((reason for marker, reason in _EDIT_FAILURE_MARKERS if marker in output), "")
+
+
+# Aider prints one of these per file it writes, with the path relative to the app's git repo.
+_APPLIED_EDIT_RE = re.compile(r"^Applied edit to (.+?)\s*$", re.MULTILINE)
+_APP_CONFIG_FILES = ("index.html", "package.json", "vite.config.js")
+
+
+def stray_edit_paths(stdout, stderr) -> list[str]:
+    """Paths Aider says it wrote outside the task scope (src/ and the three config files of the app).
+
+    Such writes are never part of the app the preview runs, the checks see or the commit
+    records, e.g. a model copying a generated-app/ prefix into a new file name.
+    """
+    root = config.APP_ROOT.resolve()
+    stray = []
+    for raw in _APPLIED_EDIT_RE.findall(text_of(stdout) + "\n" + text_of(stderr)):
+        path = raw.strip()
+        try:
+            rel = (root / path).resolve().relative_to(root).as_posix()
+        except ValueError:
+            rel = None  # outside the app altogether
+        if (rel is None or not (rel.startswith("src/") or rel in _APP_CONFIG_FILES)) and path not in stray:
+            stray.append(path)
+    return stray
+
+
+def empty_named_files(snapshot: dict, task_files: list[str]) -> list[str]:
+    """Files the task names that did not exist before it ran and are empty now.
+
+    Aider creates a named file that does not exist yet as an empty file, so an empty one
+    afterwards means the coder never wrote it (or wrote the code somewhere else). A file
+    that was already there, even empty, is left alone: the task may not have needed it.
+    """
+    empty = []
+    for rel in task_files:
+        path = config.APP_ROOT / rel
+        if path.is_file() and path.stat().st_size == 0 and rel not in snapshot["files"]:
+            empty.append(rel)
+    return empty
 
 
 def text_of(value) -> str:
@@ -364,6 +404,22 @@ async def _run_rung_attempt(job_id: str, i: int, rung, ctx: RunContext, box: dic
                 parts.append("stdout:\n" + tail(result.stdout))
             message = "\n".join(parts)
             return TaskFailure("exit", f"exited with code {result.returncode}", message, message, False)
+        stray = stray_edit_paths(result.stdout, result.stderr)
+        if stray:
+            listed = ", ".join(stray)
+            message = (f"Task {i+1} wrote files outside the app's src/ folder ({listed}), so the app never "
+                       "got that code. Its changes were reverted; the misplaced files were left for you to check.")
+            return TaskFailure("stray", f"wrote files outside src/ ({listed})",
+                               f"It wrote files outside src/: {listed}. Use exactly the file paths given "
+                               "(src/...), with no other folder in front.", message, True)
+        empty = empty_named_files(box['snapshot'], parse_task_files(job['tasks'][i]))
+        if empty:
+            listed = ", ".join(empty)
+            message = (f"Task {i+1} left files it was meant to write empty ({listed}). "
+                       "Its changes were reverted.")
+            return TaskFailure("empty", f"left named files empty ({listed})",
+                               f"It left these files empty: {listed}. Write their full contents.",
+                               message, True)
         app_jsx = config.APP_SRC / "App.jsx"
         if app_jsx.exists():
             content = app_jsx.read_text(errors='ignore')
