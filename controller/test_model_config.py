@@ -438,3 +438,30 @@ class PlannerTemperatureTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
         with self.assertRaisesRegex(RuntimeError, "rate limited"):
             self.planner.create_plan_completion(client, "gpt-6-luna", [])
+
+
+class ServerLabelTests(unittest.TestCase):
+    """MODEL_SERVER_<NAME>_LABEL names a server in the panel and badge (kind lmstudio covers MTPLX too)."""
+
+    def test_default_and_custom_labels(self):
+        from controller.model_servers import server_label
+        self.assertEqual(server_label({"MODEL_SERVER_MTPLX_KIND": "lmstudio"}, "mtplx"), "LM Studio on mtplx")
+        values = {"MODEL_SERVER_MTPLX_KIND": "lmstudio", "MODEL_SERVER_MTPLX_LABEL": "MTPLX on this Mac"}
+        self.assertEqual(server_label(values, "mtplx"), "MTPLX on this Mac")
+        self.assertEqual(server_label({"MODEL_SERVER_MY_MINI_LABEL": "  Mac mini  "}, "my-mini"), "Mac mini")
+        long = {"MODEL_SERVER_X_LABEL": "A" * 80 + "\x1b[31m"}
+        self.assertEqual(server_label(long, "x"), "A" * 40)
+
+    def test_custom_label_reaches_discovery_and_badge(self):
+        env = {**BASE_ENV, "ALLOW_LAN_MODEL_SERVERS": "on", "MODEL_SERVERS": "mtplx",
+               "MODEL_SERVER_MTPLX_KIND": "lmstudio", "MODEL_SERVER_MTPLX_URL": "http://127.0.0.1:8000",
+               "MODEL_SERVER_MTPLX_LABEL": "MTPLX on this Mac",
+               "CODER_PROVIDER": "mtplx", "CODER_MODEL": "qwen-env"}
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(discovery.httpx, "get", fake_get()):
+            entry = [p for p in discover_providers() if p["name"] == "mtplx"][0]
+            self.assertEqual(entry["label"], "MTPLX on this Mac")
+            planner, coder = resolve_roles()
+            from controller.providers import role_provider_info
+            self.assertEqual(role_provider_info("coder", coder)["label"], "MTPLX on this Mac (local)")
+            self.assertNotIn("127.0.0.1", json.dumps(entry))

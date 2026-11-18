@@ -245,13 +245,18 @@ def _server_info(provider: PlannerProvider) -> dict[str, str]:
     }
 
 
+def _server_display(provider: PlannerProvider) -> str:
+    from controller.model_servers import server_label  # lazy: model_servers imports providers
+    return server_label(os.environ, provider.server, provider.name)
+
+
 def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
     """Return safe provider evidence for UI and API responses."""
     if provider.server:
-        kind = _KIND_LABELS[provider.name]
-        label = (f"{kind} on {provider.server} / local-only" if provider.location == "local"
-                 else f"{kind} on {provider.server} / local network" if provider.location == "lan"
-                 else f"{kind} cloud model (via {provider.server})")
+        name = _server_display(provider)
+        label = (f"{name} / local-only" if provider.location == "local"
+                 else f"{name} / local network" if provider.location == "lan"
+                 else f"{_KIND_LABELS[provider.name]} cloud model (via {provider.server})")
         return {**_server_info(provider), "label": label, "model": provider.model}
     if provider.name == "ollama":
         return {
@@ -281,10 +286,9 @@ def planner_provider_info(provider: PlannerProvider) -> dict[str, str]:
 def role_provider_info(role: str, provider: PlannerProvider) -> dict[str, str]:
     """Safe per-role evidence (no keys, and no URL for a named server)."""
     if provider.server:
-        kind = _KIND_LABELS[provider.name]
         where = {"local": "local", "lan": "local network", "cloud": "cloud"}[provider.location]
-        label = (f"{kind} cloud model (via {provider.server})" if provider.location == "cloud"
-                 else f"{kind} on {provider.server} ({where})")
+        label = (f"{_KIND_LABELS[provider.name]} cloud model (via {provider.server})" if provider.location == "cloud"
+                 else f"{_server_display(provider)} ({where})")
         return {"role": role, **_server_info(provider), "label": label, "model": provider.model}
     if provider.name == "ollama":
         label = "Ollama (local)" if provider.is_local else "Ollama cloud model (via local server)"

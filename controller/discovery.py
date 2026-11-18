@@ -102,7 +102,8 @@ def _discover_server(name: str) -> dict:
         server = resolve_server(os.environ, name)
     except PlannerConfigurationError as exc:
         return _entry(name, error=str(exc), kind="lmstudio", label=name)
-    label = f"{_LABELS[server.kind]} on {name}"
+    from controller.model_servers import server_label
+    label = server_label(os.environ, name, server.kind)
     where = "lan" if server.lan else "local"
     try:
         data = _get_json(f"{server.base}{_MODELS_PATHS[server.kind]}")

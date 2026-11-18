@@ -158,6 +158,23 @@ def validate_server_url(value: str, variable: str, allow_lan: bool) -> tuple[str
         f"{variable} must be localhost, a private network IP address, or a .local host name")
 
 
+_KIND_DISPLAY = {"lmstudio": "LM Studio", "ollama": "Ollama"}
+
+
+def server_label(values, name: str, kind: str | None = None) -> str:
+    """Display name for a server: MODEL_SERVER_<NAME>_LABEL, else "<kind> on <name>".
+
+    Needed because kind "lmstudio" means "any OpenAI-compatible server" (MTPLX too),
+    so the default name can be misleading. Never contains the URL.
+    """
+    raw = values.get(f"MODEL_SERVER_{_infix(name)}_LABEL", "").strip()
+    cleaned = "".join(ch for ch in raw if ch.isprintable())[:40].strip()
+    if cleaned:
+        return cleaned
+    kind = kind or values.get(f"MODEL_SERVER_{_infix(name)}_KIND", "").strip().lower()
+    return f"{_KIND_DISPLAY.get(kind, 'Server')} on {name}"
+
+
 def resolve_server(values, name: str) -> ModelServer:
     """Build a configured server. A .local host is resolved now; call again to refresh."""
     if name not in server_names(values):

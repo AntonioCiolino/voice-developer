@@ -149,7 +149,7 @@
         <label for="cfg-planner-provider">Provider</label>
         <select id="cfg-planner-provider" onchange="configProviderChanged('planner')"></select>
         <label for="cfg-planner-model">Model</label>
-        <select id="cfg-planner-model" onchange="configUpdateSave()"></select>
+        <select id="cfg-planner-model" onchange="configSelectionChanged('planner')"></select>
         <div class="cfgTag" id="cfg-planner-tag"></div>
         <div class="cfgErr" id="cfg-planner-err"></div>
       </fieldset>
@@ -158,7 +158,7 @@
         <label for="cfg-coder-provider">Provider</label>
         <select id="cfg-coder-provider" onchange="configProviderChanged('coder')"></select>
         <label for="cfg-coder-model">Model</label>
-        <select id="cfg-coder-model" onchange="configUpdateSave()"></select>
+        <select id="cfg-coder-model" onchange="configSelectionChanged('coder')"></select>
         <div class="cfgTag" id="cfg-coder-tag"></div>
         <div class="cfgErr" id="cfg-coder-err"></div>
       </fieldset>
@@ -611,9 +611,31 @@
       document.getElementById('configSaveBtn').disabled = !ok;
     }
 
+    // The hint under each role describes what is selected in the dropdowns right now,
+    // and says whether that is the saved setting or a change not saved yet.
+    function configUpdateTag(role) {
+      const tag = document.getElementById(`cfg-${role}-tag`);
+      const provider = document.getElementById(`cfg-${role}-provider`).value;
+      const model = document.getElementById(`cfg-${role}-model`).value;
+      const info = configProviderInfo(provider);
+      const entry = info && (info.models || []).find(m => m.id === model);
+      const location = (entry && entry.location) || (info && info.location) || 'local';
+      const where = { cloud: 'Cloud', lan: 'Local network' }[location] || 'This machine';
+      const name = (info && (CONFIG_PROVIDER_LABELS[info.name] || info.label)) || provider;
+      const current = configData && configData.roles && configData.roles[role];
+      const saved = current && current.provider === provider && current.model === model;
+      const state = saved ? (current.source === 'ui' ? 'chosen here' : 'from .env') : 'not saved yet';
+      tag.textContent = provider ? `${name} · ${where} · ${state}` : '';
+    }
+
+    function configSelectionChanged(role) {
+      configUpdateTag(role);
+      configUpdateSave();
+    }
+
     function configProviderChanged(role) {
       configFillModels(role, null);
-      configUpdateSave();
+      configSelectionChanged(role);
     }
 
     function renderConfig() {
@@ -631,10 +653,7 @@
         const current = data.roles && data.roles[role];
         if (current) providerSelect.value = current.provider;
         configFillModels(role, current && current.model);
-        const tag = document.getElementById(`cfg-${role}-tag`);
-        tag.textContent = current
-          ? `${{ cloud: 'Cloud', lan: 'Local network' }[current.location] || 'This machine'} · ${current.source === 'ui' ? 'chosen here' : 'from .env'}`
-          : '';
+        configUpdateTag(role);
       });
       if (data.config_error) configMessage(data.config_error, 'err');
       else if (data.busy) configMessage('A run is active. Changes apply from the next run.', 'note');
