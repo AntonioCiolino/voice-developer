@@ -331,6 +331,8 @@
     let countdownTimer = null;    // display timer of the countdown on screen
     let countdownJobId = null;    // the plan the server will start when it reaches zero
     let modalJobId = null;        // the plan shown in the plan window
+    // How long the finished plan stays on screen before the window closes to show the app.
+    const PLAN_CLOSE_AFTER_DONE_MS = 3500;
 
     function escapeHtml(text) {
       return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -545,9 +547,10 @@
             document.getElementById('prompt').value = '';
             clearProcessing();
             reloadPreview();
-            // Close this plan's window later, but only if it is still the one shown: a new Plan
-            // within 10 s used to be closed by this, which also cancelled its auto-start.
-            setTimeout(() => { if (modalJobId === jobId && !countdownJobId && !isExecuting) closePlan(); }, 10000);
+            // Close this plan's window shortly after, but only if it is still the one shown: a new
+            // Plan started meanwhile used to be closed by this, which also cancelled its auto-start.
+            setTimeout(() => { if (modalJobId === jobId && !countdownJobId && !isExecuting) closePlan(); },
+                       PLAN_CLOSE_AFTER_DONE_MS);
           } else if (job.status === 'planned' && job.error && job.auto_start_in == null) {
             // The server's auto-start could not start it (e.g. another plan was running).
             clearInterval(pollTimer);
