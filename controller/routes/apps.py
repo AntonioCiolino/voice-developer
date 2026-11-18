@@ -1,3 +1,5 @@
+import json
+import re
 import shutil
 import subprocess
 
@@ -8,6 +10,47 @@ from controller.schemas import LoadAppRequest, SaveRequest
 
 router = APIRouter()
 
+# The name of the app in generated-app/ (set by Save and Load, cleared by New App), so the
+# phone can show it and Save can default to it. Git ignored; survives a restart.
+CURRENT_APP_PATH = config.REPO_ROOT / "controller" / "current-app.json"
+_APP_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,49}$")
+
+
+def app_slug(name: str) -> str:
+    """The folder name for a saved app: lowercase, spaces to '-', letters, digits, '-' and '_' only."""
+    slug = re.sub(r"\s+", "-", (name or "").strip().lower())[:50]
+    if not _APP_NAME_RE.match(slug):
+        raise HTTPException(status_code=400, detail="App name: use letters, digits, spaces, '-' or '_'")
+    return slug
+
+
+def saved_app_path(name: str):
+    """The saved app folder for an existing name, never outside saved-apps/."""
+    path = (config.SAVED_APPS / name).resolve()
+    if path.parent != config.SAVED_APPS.resolve() or not path.is_dir():
+        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+    return path
+
+
+def current_app_name() -> str | None:
+    try:
+        name = json.loads(CURRENT_APP_PATH.read_text()).get("name")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return name if isinstance(name, str) and _APP_NAME_RE.match(name) else None
+
+
+def set_current_app(name: str | None) -> None:
+    if name is None:
+        CURRENT_APP_PATH.unlink(missing_ok=True)
+    else:
+        CURRENT_APP_PATH.write_text(json.dumps({"name": name}) + "\n")
+
+
+@router.get("/current-app")
+def get_current_app():
+    return {"name": current_app_name()}
+
 
 
 @router.post("/save")
@@ -15,7 +58,7 @@ def save_app(req: SaveRequest):
     if not req.name or not req.name.strip():
         raise HTTPException(status_code=400, detail="App name required")
 
-    name = req.name.strip().replace(" ", "-").lower()[:50]
+    name = app_slug(req.name)
     save_path = config.SAVED_APPS / name
 
     if save_path.exists() and not req.overwrite:
@@ -24,7 +67,7 @@ def save_app(req: SaveRequest):
     config.SAVED_APPS.mkdir(parents=True, exist_ok=True)
 
     try:
-        app_root = config.REPO_ROOT / "generated-app"
+        app_root = config.APP_ROOT
 
         # Ensure git history exists before saving
         git_dir = app_root / ".git"
@@ -42,9 +85,11 @@ def save_app(req: SaveRequest):
 
         # Copy entire generated-app (includes .git for history)
         shutil.copytree(app_root, save_path)
+        set_current_app(name)
         return {
             "status": "ok",
             "message": f"App saved as '{name}'",
+            "name": name,
             "path": str(save_path),
         }
     except Exception as e:
@@ -71,11 +116,9 @@ def list_apps():
 
 @router.post("/load-app")
 def load_app(req: LoadAppRequest):
-    app_path = config.SAVED_APPS / req.name
-    if not app_path.exists():
-        raise HTTPException(status_code=404, detail=f"App '{req.name}' not found")
+    app_path = saved_app_path(req.name)
     try:
-        gen_app_path = config.REPO_ROOT / "generated-app"
+        gen_app_path = config.APP_ROOT
 
         # Replace src contents without deleting the dir — keeps Vite's watcher alive
         src_dest = gen_app_path / "src"
@@ -112,7 +155,9 @@ def load_app(req: LoadAppRequest):
             timeout=60,
         )
 
-        return {"status": "ok", "message": f"Loaded app '{req.name}'"}
+        # Saved folders made before names were validated may not be valid names; show none then.
+        set_current_app(req.name if _APP_NAME_RE.match(req.name) else None)
+        return {"status": "ok", "message": f"Loaded app '{req.name}'", "name": current_app_name()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Load failed: {str(e)}")
 
@@ -120,7 +165,7 @@ def load_app(req: LoadAppRequest):
 @router.post("/revert")
 def revert(count: int = 1):
     """Revert to a previous commit in generated-app."""
-    app_root = config.REPO_ROOT / "generated-app"
+    app_root = config.APP_ROOT
     try:
         # Get the commit hash to revert to
         result = subprocess.run(
@@ -201,13 +246,15 @@ export default function App() {
         # Ensure npm dependencies are installed
         subprocess.run(
             ["npm", "install"],
-            cwd=str(config.REPO_ROOT / "generated-app"),
+            cwd=str(config.APP_ROOT),
             capture_output=True,
         )
 
+        set_current_app(None)
         return {
             "status": "ok",
             "message": "Fresh app created — ready to generate",
+            "name": None,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"New app failed: {str(e)}")

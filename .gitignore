@@ -30,3 +30,5 @@ worker/tasks.log
 
 # Saved UI model selection
 controller/model-selection.json
+# Name of the app currently in generated-app/
+controller/current-app.json
