@@ -179,6 +179,8 @@ If node, `generated-app/node_modules` or `controller/lint-tools/node_modules` is
 
 Limit: these checks do not run the page. A runtime error such as reading a property of an undefined object still passes, and the page can still render blank.
 
+**No tests, on purpose.** Generated apps get no unit tests: the planner never plans them and the controller runs none. The apps are for fun (a game to play now, a quiz for tonight), and fast iteration by voice matters more than coverage; the build and lint checks catch the breakage that stops an app from loading. When an app is worth hardening, it moves to its own repo and is worked on there like any other codebase: pull it into a coding agent, write tests (for example Vitest for its logic modules), add CI, review the code. [Neon Tunnel](https://github.com/AntonioCiolino/neon-tunnel) is set up that way. It can still be loaded back into Voice Developer for more changes by voice; only `src/`, `index.html` and `package.json` come along, and Voice Developer will not run its tests.
+
 ## Small files
 
 The local coder (a 7B model) edits small files reliably and large ones badly, so the app is kept as many small files.
