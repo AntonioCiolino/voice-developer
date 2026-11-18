@@ -202,6 +202,8 @@ Plan uses two independently configured roles, set in `controller/.env` or chosen
 | `ALLOW_LAN_MODEL_SERVERS` | `on` lets a named model server be on your local network | `off` |
 | `MODEL_SERVERS` | Comma list of model server names, e.g. `mini,studio` | none |
 | `MODEL_SERVER_<NAME>_KIND`, `MODEL_SERVER_<NAME>_URL` | Per server: `lmstudio` or `ollama`, and its `http://` address | required for each named server |
+| `MODEL_SERVER_<NAME>_LABEL` | Name shown for the server in the panel and badge, e.g. `MTPLX on Mac mini` | `<kind> on <name>` |
+| `MODEL_SERVER_<NAME>_API_KEY` | Key sent as `Authorization: Bearer <key>` to that server only (`lmstudio` kind), e.g. for MTPLX started with `--api-key-file` | none |
 | `ESCALATE_LOCAL_ONLY` | Ladder scope: `off`, `on` (this machine only), `lan` (never cloud) | `off` |
 Existing `.env` files that set only `PLANNER_PROVIDER`, `OPENAI_MODEL`, and `OLLAMA_MODEL` behave exactly as before. An empty value counts as unset. Both roles share one `OLLAMA_API_BASE`, which must be loopback (`localhost`, `127.0.0.1`, or `::1`), and one `OPENAI_API_KEY`.
 
@@ -269,12 +271,82 @@ A model server is another computer running LM Studio, Ollama or an OpenAI-compat
    MODEL_SERVER_MINI_URL=http://r2m2-mini.local:1234
    ```
 4. Restart the controller, then pick **LM Studio on mini** and its model in the ⚙ panel, or set `CODER_PROVIDER=mini` and `CODER_MODEL=<model id>`. The model is always required for a named server. In a ladder use `mini:<model>`, e.g. `CODER_LADDER=lmstudio:qwen2.5-coder-7b-instruct,mini:mlx-community/qwen3.5-4b-mlx-4bit,openai:gpt-6-luna`.
-MTPLX serves an OpenAI-compatible API, so it is a `lmstudio` kind server: `MODEL_SERVER_MTPLX_KIND=lmstudio`, `MODEL_SERVER_MTPLX_URL=http://r2m2-mini.local:8000`, and the model id is the one the server lists.
-- **Security.** LM Studio and MTPLX servers have no login, so anyone on the network can use them. Use only a network you trust. Only private addresses (10.x, 172.16-31.x, 192.168.x) and `.local` names are accepted. A `.local` name is looked up again on every use and the validated address is used for that connection. A public address is an error, never a fallback. `LMSTUDIO_API_BASE` and `OLLAMA_API_BASE` stay loopback-only.
+MTPLX serves an OpenAI-compatible API, so it is a `lmstudio` kind server: `MODEL_SERVER_MTPLX_KIND=lmstudio`, `MODEL_SERVER_MTPLX_URL=http://r2m2-mini.local:8000`, and the model id is the one the server lists. See [MTPLX on another Mac](#mtplx-on-another-mac) for the full setup.
+- **Security.** LM Studio servers have no login, so anyone on the network can use them. Use only a network you trust. MTPLX refuses to listen on the network without a key; give it one with `--api-key-file` and put the same key in `MODEL_SERVER_<NAME>_API_KEY`. The key is sent only to that server, is passed to Aider only for that server's rung (as `LM_STUDIO_API_KEY`), and never appears in the panel, the API, saved selections, logs or error messages. A key on an `ollama` kind server, or one with spaces or control characters, is a configuration error. Only private addresses (10.x, 172.16-31.x, 192.168.x) and `.local` names are accepted. A `.local` name is looked up again on every use and the validated address is used for that connection. A public address is an error, never a fallback. `LMSTUDIO_API_BASE` and `OLLAMA_API_BASE` stay loopback-only.
 - **`local_only`** (the `Local-only:` badge) means both roles run on this machine. A LAN server is never `local_only`.
 - **Removed server.** If a saved panel choice names a server you removed from `MODEL_SERVERS` (or `ALLOW_LAN_MODEL_SERVERS` is off), the panel shows a configuration error and runs fail with the same message. Nothing falls back. Add the server back, or use **Use .env** to clear the choice.
 - **Unreachable server.** Before each attempt on a network rung the server is looked up again and probed (2 s). If it does not answer, that rung fails as unreachable and the ladder moves to the next rung. A single coder fails the task with `model server <name> is not reachable`.
 - **`ESCALATE_LOCAL_ONLY`.** `off` allows every rung. `on` keeps this machine only and drops network rungs. `lan` keeps this machine and network rungs and never uses the cloud.
+### MTPLX on another Mac
+
+MTPLX (a Mac app with a command line server) runs MTPLX-packed models with their MTP head, which makes Aider's whole-file edits several times faster than LM Studio or mlx-serve (on an M2 Pro, copying a file with one change: 198 tok/s vs 54 and 49). This is how to run it as a coder for this controller on another Mac on your network.
+
+1. **Install the MTPLX app** and download the model in it (e.g. `Youssofal/Qwen3.5-4B-MTPLX-Optimized-Speed`). Stop the app's own server in its dashboard: the command line server below needs port 8000 and the memory.
+2. **Make the `mtplx` command reachable.** The app keeps it in its support folder:
+   ```
+   alias mtplx="\"$HOME/Library/Application Support/MTPLX/runtime-venv/bin/mtplx\""
+   ```
+   Add that line to `~/.zshrc` to keep it.
+3. **Find the model folder.** Pass a folder path to `--model`; a Hugging Face name makes MTPLX try to download it again.
+   ```
+   find ~ -maxdepth 7 -name mtplx_runtime.json 2>/dev/null
+   ```
+   The folder holding that file is the model folder (usually `~/.mtplx/models/<Publisher>--<Model>`, or under `~/.lmstudio/models/` if LM Studio downloaded it). The model id MTPLX reports comes from the folder name, so the same model can have different ids on different Macs (`youssofal-qwen3.5-4b-mtplx-optimized-speed` vs `qwen3.5-4b-mtplx-optimized-speed`). Use the id that Mac reports.
+4. **Create a key file.** MTPLX will not listen on the network without one, and an empty file rejects every request.
+   ```
+   printf '<your key>' > ~/.mtplx/api-key
+   chmod 600 ~/.mtplx/api-key
+   ```
+5. **Start the server** on all interfaces. MTPLX reads the key file only at startup.
+   ```
+   mtplx serve --model "<model folder>" --host 0.0.0.0 --port 8000 \
+     --api-key-file ~/.mtplx/api-key --reasoning off \
+     --prefill-chunk-tokens <chunk> --paged-kv-quantization <q8|q4> \
+     --context-window <tokens> --allow-swap [--memory-limit max]
+   ```
+   On that Mac, `lsof -iTCP:8000 -sTCP:LISTEN` should show `*:8000`.
+6. **Add it to `controller/.env`** and restart the controller:
+   ```
+   ALLOW_LAN_MODEL_SERVERS=on
+   MODEL_SERVERS=studio
+   MODEL_SERVER_STUDIO_KIND=lmstudio
+   MODEL_SERVER_STUDIO_URL=http://<name>.local:8000
+   MODEL_SERVER_STUDIO_LABEL=MTPLX on studio
+   MODEL_SERVER_STUDIO_API_KEY=<your key>
+   ```
+   Pick it in the ⚙ panel, or set `CODER_PROVIDER=studio` and `CODER_MODEL=<id>`, or put `studio:<id>` first in `CODER_LADDER`.
+7. **Check it from this Mac** before using it:
+   ```
+   curl -s -o /dev/null -w '%{http_code}\n' http://<name>.local:8000/v1/models                  # 401: key required
+   curl -s -H "Authorization: Bearer <your key>" http://<name>.local:8000/v1/models             # 200 and the model id
+   ```
+   Then send one Aider-sized prompt (5–8k tokens) to `/v1/chat/completions` with the key. It must return 200, not 507. A 507 means MTPLX ran out of memory while reading the prompt; see the sizing table below.
+
+**Sizing.** Aider sends about 1–2k tokens of instructions plus each file it edits, and with the whole-file format the reply repeats the file. For `App.jsx` (~3,500 tokens) a task needs about 9k tokens of context. The flags trade memory for speed and quality:
+
+| Flag | Small Mac (8 GB) | 16 GB with a desktop and Kiro |
+| --- | --- | --- |
+| `--prefill-chunk-tokens` | 64 (smaller peak while reading the prompt) | 512 (reads faster) |
+| `--paged-kv-quantization` | q4 | q8 (closer to full quality) |
+| `--context-window` | 8192 | 16384 |
+| `--memory-limit` | `max` (only on a Mac nobody is using: it removes MTPLX's safety margin, and an over-commit crashes the server instead of returning 507) | default (75% of RAM) |
+| `--allow-swap` | yes | yes |
+
+`--allow-swap` only lets a too-large prompt past MTPLX's up-front check; it does not prevent a 507 when memory runs out while reading the prompt.
+
+**Measured with Qwen3.5 4B:**
+
+| | M2 Pro, 16 GB (`mtplx-local.sh`) | M1, 8 GB |
+| --- | --- | --- |
+| Read a ~1.9k-token prompt | 4.3 s (430 tok/s) | 12.0 s (158 tok/s) |
+| Read a ~5.8k-token prompt | 15.1 s (384 tok/s) | failed (507) at window 12288; fit up to 7.9k tokens at window 8192 with `--memory-limit max`, at ~150 tok/s |
+| Read a ~9.8k-token prompt | 26.2 s (375 tok/s) | failed |
+| Write 400 tokens of code | 7.3 s (55 tok/s) | failed |
+
+An 8 GB Mac runs out of room for the 2.4 GiB of model weights plus a prompt that size, so use a Mac with at least 16 GB as a coder server.
+
+**On this Mac**, `./mtplx-local.sh` starts the same kind of server with the 16 GB settings, listening only on `127.0.0.1:8000` (no key needed on loopback; this is the `mtplx` server in `.env`). Override a setting for one run with `MTPLX_CONTEXT`, `MTPLX_PREFILL_CHUNK`, `MTPLX_KV_QUANT`, `MTPLX_MODEL`, `MTPLX_PORT` or `MTPLX_BIN`, e.g. `MTPLX_CONTEXT=32768 ./mtplx-local.sh`. It refuses to start if port 8000 is already in use (usually by the MTPLX app's own server).
+
 Local model caveats on an M2 Pro with 16 GB RAM:
 - Models of about 7-8B fit. `qwen3:14b` is likely to swap.
 - Ollama defaults to a small context window (often 2048-4096 tokens; check `ollama show <model>`). That truncates Aider's repo map and file contents. Raise it with `OLLAMA_CONTEXT_LENGTH` in the Ollama server environment or `num_ctx` in a Modelfile, which also raises RAM use.
@@ -320,6 +392,16 @@ Optional coder settings in `controller/.env` (see `controller/.env.example`):
 - `MAX_FILE_LINES` is the line limit per generated source file (default `150`, `.env` only). See [Small files](#small-files).
 - `AIDER_BIN` is the Aider executable. By default the controller uses `controller/aider-venv/bin/aider` (Aider 0.86.2, created by `./setup.sh`), falling back to `aider` on `PATH`. Aider lives in its own environment because its dependencies would otherwise replace the controller's pinned FastAPI, Pydantic and OpenAI versions. To create it by hand: `python3 -m venv controller/aider-venv && controller/aider-venv/bin/pip install aider-chat==0.86.2`.
 - `CODER_ENGINE` is `aider` (default) or `opencode`. OpenCode is a stub that defines the command (`opencode run --model <provider/model> --format json`, Ollama through an OpenAI-compatible `/v1` endpoint with a 64k+ context). Selecting it fails with "not implemented yet"; it never falls back to Aider or a cloud provider.
+
+### Why Aider and not OpenCode (for now)
+
+OpenCode was considered as the coder engine and put aside (November 2026). The stub stays so it can be picked up later.
+
+- **What Aider costs.** Aider sends the whole of every file it edits, in every edit format. With the `whole` format (the default for local coders, because small models broke `diff` search/replace blocks) the reply is the whole file again. A 470-line `App.jsx` is about 3,500 tokens each way, which is slow on a local model and runs an 8 GB Mac out of memory.
+- **What OpenCode would change.** OpenCode is a tool-using agent: it can read a range of lines and edit by exact string replacement, so it does not need to read or rewrite whole files. For big files that is the better design.
+- **Why not now.** That design depends on reliable tool calling over many round trips, and it adds a large system prompt and tool definitions (it expects a 64k+ context). The local coders we run (Qwen3.5 4B on MTPLX, Qwen2.5 Coder 7B on LM Studio) are weakest at exactly that, so we expect OpenCode to do worse than Aider with them. With a cloud coder such as `gpt-6-luna` it would likely work, but Aider with the `diff` format already returns only the changed lines there, and Luna is fast and cheap enough that the whole-file input is not a problem.
+- **What we do instead.** Keep files small: the planner is told the [Small files](#small-files) limit and the controller warns after each task when a file is over `MAX_FILE_LINES`. Small files make Aider's whole-file input and output short, which helps local models more than switching engines would. Split an existing large file once with a cloud coder.
+- **When to revisit.** If local models get good at tool calling (or a larger Mac can run a stronger local coder), compare OpenCode and Aider on the same tasks: tokens sent, time, and success rate.
 
 Keep all API keys, OAuth secrets, and session secrets in the ignored `controller/.env` file or another secret store. Do not commit credentials or put them in prompts, source files, or logs.
 
