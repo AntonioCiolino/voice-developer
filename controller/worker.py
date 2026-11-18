@@ -16,7 +16,7 @@ from controller.coder import (
     resolve_task_validation,
     resolve_validation_timeout,
 )
-from controller.escalation import UNPARSED_CLOUD_COST, resolve_escalation
+from controller.escalation import estimate_cloud_cost, resolve_escalation
 from controller.planning import parse_task_files
 from controller.providers import (
     PlannerConfigurationError,
@@ -263,14 +263,14 @@ def _charge(job: dict, i: int, rung, output: str, active: bool, costs: list[str]
     amount = extract_cost_amount(output)
     estimated = False
     if active and amount is None and not rung.provider.is_local:
-        amount, estimated = UNPARSED_CLOUD_COST, True
+        amount, estimated = estimate_cloud_cost(rung.provider.model, output), True
         job['plan_cost_estimated'] = True
-        line = f"cost not reported by Aider; counted ${UNPARSED_CLOUD_COST:.2f} estimate"
+        line = f"cost not reported by Aider; counted ${amount:.4f} estimate from token counts"
         job['task_logs'][i] = (job['task_logs'][i] + "\n" if job['task_logs'][i] else "") + line
     if shown:
         costs.append(shown)
     elif estimated:
-        costs.append(f"~${UNPARSED_CLOUD_COST:.2f}")
+        costs.append(f"~${amount:.4f}")
     job['task_costs'][i] = " + ".join(costs)
     if active:
         job['plan_cost'] = round(float(job.get('plan_cost') or 0.0) + (amount or 0.0), 6)

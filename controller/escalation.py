@@ -13,9 +13,47 @@ from controller.providers import (
     _resolve_role,
 )
 
-# Counted for a cloud attempt whose cost Aider did not print (timeout, crash, lost output),
-# so unseen spend cannot grow without bound under the cost cap.
+# Counted for a cloud attempt whose cost Aider did not print AND whose model has no known
+# price, so unseen spend cannot grow without bound under the cost cap.
 UNPARSED_CLOUD_COST = 0.10
+
+# Dollars per 1M tokens (input, output) for models whose price we know. Used to estimate an
+# attempt Aider did not price (timeout, crash, lost output) from the token counts it printed.
+MODEL_PRICES = {
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-6.1-terra": (1.00, 5.00),
+    "gpt-6.1-sol": (2.00, 10.00),
+    "gpt-6-sol": (2.00, 10.00),
+    "gpt-6.2-sol": (2.00, 10.00),
+    "gpt-6.2-astra": (8.00, 40.00),
+    "gpt-6-astra": (10.00, 50.00),
+}
+# Tokens assumed when an attempt printed no counts: the size of a typical task attempt.
+ASSUMED_TOKENS = (8_000, 4_000)
+
+
+def _token_count(text: str) -> float:
+    return float(text[:-1]) * 1000 if text.endswith("k") else float(text)
+
+
+def estimate_cloud_cost(model: str, output: str) -> float:
+    """Estimated dollars for one cloud attempt that Aider did not price.
+
+    Uses the "Tokens: X sent, Y received" lines Aider prints, priced at the model's known
+    rate. With no token lines it assumes a typical attempt. A model with no known price
+    gets the flat UNPARSED_CLOUD_COST.
+    """
+    import re
+
+    price = MODEL_PRICES.get(model.split("/")[-1].lower())
+    if price is None:
+        return UNPARSED_CLOUD_COST
+    pairs = re.findall(r"Tokens:\s*([\d.]+k?)\s*sent,\s*([\d.]+k?)\s*received", output or "")
+    sent, received = (
+        (sum(_token_count(s) for s, _ in pairs), sum(_token_count(r) for _, r in pairs))
+        if pairs else ASSUMED_TOKENS
+    )
+    return round(sent / 1e6 * price[0] + received / 1e6 * price[1], 6)
 DEFAULT_MAX_PLAN_COST = 1.00
 _MODES = ("on", "suggest", "off")
 _PROVIDERS = ("openai", "ollama", "lmstudio")

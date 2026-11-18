@@ -10,7 +10,7 @@ from fastapi import HTTPException
 import controller.test_plan_flow as tpf
 from controller import selection, state
 from controller.coder import extract_cost_amount
-from controller.escalation import UNPARSED_CLOUD_COST, resolve_escalation
+from controller.escalation import UNPARSED_CLOUD_COST, estimate_cloud_cost, resolve_escalation
 from controller.providers import PlannerConfigurationError, PlannerProvider, resolve_coder_provider
 from controller.routes.jobs import continue_plan
 from controller.store import load_jobs
@@ -263,12 +263,26 @@ class LadderRunTests(tpf.TempAppCase):
 
     def test_cost_cap_with_unparsable_cloud_cost_counts_estimate(self):
         bad = {"stdout": "APIConnectionError"}
-        job, fake = self.run_with([bad, bad, self.ok(0)], tasks=("t1",), extra={"MAX_PLAN_COST": "0.10"})
+        job, fake = self.run_with([bad, bad, self.ok(0)], tasks=("t1",), extra={"MAX_PLAN_COST": "0.02"})
         self.assertEqual(len(fake.calls), 2)
-        self.assertEqual(job["plan_cost"], UNPARSED_CLOUD_COST)
+        # Terra with no token lines: the assumed 8k in / 4k out at $1 / $5 per 1M tokens.
+        self.assertEqual(job["plan_cost"], 0.028)
         self.assertTrue(job["plan_cost_estimated"])
         self.assertIn("estimated parts included", job["error"])
-        self.assertIn("counted $0.10 estimate", job["task_logs"][0])
+        self.assertIn("counted $0.0280 estimate from token counts", job["task_logs"][0])
+
+    def test_estimate_uses_printed_token_counts_and_the_models_price(self):
+        out = "Tokens: 4.9k sent, 3.5k received.\nTokens: 1.2k sent, 94 received."
+        # 6.1k in and 3594 out on Luna ($0.10 / $0.50 per 1M).
+        self.assertEqual(estimate_cloud_cost("gpt-6-luna", out), round(6100 / 1e6 * 0.10 + 3594 / 1e6 * 0.50, 6))
+        self.assertLess(estimate_cloud_cost("gpt-6-luna", out), 0.003)
+        self.assertEqual(estimate_cloud_cost("openai/gpt-6.2-astra", "Tokens: 5k sent, 3.5k received."),
+                         round(5000 / 1e6 * 8 + 3500 / 1e6 * 40, 6))
+
+    def test_estimate_without_counts_assumes_a_typical_attempt_and_unknown_models_stay_flat(self):
+        self.assertEqual(estimate_cloud_cost("gpt-6-luna", ""), 0.0028)
+        self.assertEqual(estimate_cloud_cost("some-new-model", "Tokens: 5k sent, 3k received."),
+                         UNPARSED_CLOUD_COST)
 
     def test_local_attempt_is_free_and_not_blocked_after_cap(self):
         self.make_job(tpf.JOB_A, ["t1"])
